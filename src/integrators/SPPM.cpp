@@ -18,12 +18,14 @@ SPPM::SPPM(unsigned int dPhotons, unsigned int cPhotons, int _passnum)
 SPPM::~SPPM()
 {}
 
+bool SPPM::preprocess()
+{
+	return true;
+}
 bool SPPM::render(yafaray::imageFilm_t *image)
 {
 	std::stringstream passString;
 	imageFilm = image;
-
-
 
 	//scene->getAAParameters(AA_samples, AA_passes, AA_inc_samples, AA_threshold);
 	//iAA_passes = 1.f / (float) AA_passes;
@@ -33,16 +35,26 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	//Y_INFO << integratorName << ": Max. " << AA_samples + std::max(0,AA_passes-1) * AA_inc_samples << " total samples" << std::endl;
 	//passString << "Rendering pass 1 of " << std::max(1, AA_passes) << "...";
 	//Y_INFO << integratorName << ": " << passString.str() << std::endl;
+
+
 	if(intpb) intpb->setTag(passString.str().c_str());
 
 	gTimer.addEvent("rendert");
 	gTimer.start("rendert");
-	imageFilm->init(passNum);
+	imageFilm->init(passNum); // need to doule-check how it effect sppm.
 	
+	const camera_t* camera = scene->getCamera();
+	progressiveData.reserve(camera->resX() * camera->resY()); // used for SPPM
+
 	maxDepth = 0.f;
 	minDepth = 1e38f;
 
-	if(scene->doDepth()) // not very clear how to use it
+	point3d_t a(1e38f,1e38f,1e38f);
+	point3d_t g(0.f, 0.f, 0.f); // Is it right for the initial g point?
+
+	bound_t bBox(a, g);
+
+	if(scene->doDepth()) //  Use it to set get scene BBox.
 	{
 		const camera_t* camera = scene->getCamera();
 		diffRay_t c_ray;
@@ -59,19 +71,32 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 				scene->intersect(c_ray, sp);
 				if(c_ray.tmax > maxDepth) maxDepth = c_ray.tmax;
 				if(c_ray.tmax < minDepth && c_ray.tmax >= 0.f) minDepth = c_ray.tmax;
+				bBox.include(sp.P);
 			}
 		}
 		if(maxDepth > 0.f) maxDepth = 1.f / (maxDepth - minDepth);
 	}
-	const camera_t* camera = scene->getCamera();
-	progressiveData.reserve(camera->resX() * camera->resY()); //not possible, used for SPPM
+
+	// initialize SPPM statistics
+	float initialRadius = ((bBox.longX() + bBox.longY() + bBox.longZ()) / 3.f) / ((camera->resX() + camera->resY()) / 2.0f) * 2.f ;
+	
+	std::vector<shared_statistics>::iterator itr;
+	for(itr = progressiveData.begin(); itr != progressiveData.end(); itr++)
+	{
+		itr->accflux = colorA_t(0.f);
+		itr->photoncount = 0;
+		itr->radius = initialRadius;
+	}
+	
+  //  //
 	//renderPass(AA_samples, 0, false);
+
 	for(int i=0; i<passNum; ++i) // progress pass
 	{
 		if(scene->getSignals() & Y_SIG_ABORT) break;
 		//imageFilm->setAAThreshold(AA_threshold);
 		imageFilm->nextPass(false, integratorName);
-		renderPass(1, 1 + (i-1)*1, true);
+		renderPass(1, 1 + (i-1)*1, false); // offset seems only used for sampling?
 	}
 	maxDepth = 0.f;
 	gTimer.stop("rendert");
@@ -221,6 +246,7 @@ bool SPPM::prepass(int samples, int offset, bool adaptive)
 	//set << "RayDepth [" << rDepth << "]";
 
 	diffuseMap.clear();
+	causticMap.clear();
 	background = scene->getBackground();
 	lights = scene->lights;
 	std::vector<light_t*> tmplights;
@@ -649,7 +675,8 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 		// add caustics  need to be changed for sppm
 		if(bsdfs & (BSDF_DIFFUSE))
 		{
-			col += estimatePhotons(state, sp, causticMap, wo, nCausSearch, cRadius); // not need to scale energy, need to be changed here? 
+			//The linker could not find this method now, why?
+			//col += estimatePhotons(state, sp, causticMap, wo, nCausSearch, cRadius); // not need to scale energy, need to be changed here? 
 		}
 		
 		state.raylevel++;
@@ -813,7 +840,6 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 
 integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 {
-
 	//int shadowDepth=5; //may used 
 	int raydepth=5;
 	int _passNum = 10000;
@@ -833,8 +859,8 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	//params.getParam("diffuseRadius", dsRad);
 	//params.getParam("causticRadius", cRad);
 	//params.getParam("radius", curRad);
-	params.getParam("search", search);
-	caustic_mix = search;
+	//params.getParam("search", search); // FIXED
+	//caustic_mix = search;
 	params.getParam("caustic_mix", caustic_mix);
 	params.getParam("bounces", bounces);
 
