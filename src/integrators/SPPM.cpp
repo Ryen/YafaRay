@@ -1,4 +1,4 @@
-﻿#include "SPPM.h"
+﻿#include <integrators/SPPM.h>
 #include <sstream>
 #include <cmath>
 #include <algorithm>
@@ -7,6 +7,10 @@ __BEGIN_YAFRAY
 
 SPPM::SPPM(unsigned int dPhotons, unsigned int cPhotons, int _passnum)
 {
+	type = SURFACE;
+	intpb = 0;
+	integratorName = "SPPM";
+	integratorShortName = "SPPM";
 	nPhotons = dPhotons;
 	nSearch = dPhotons; // need to find all photons in the region.
 	nCausPhotons = cPhotons;
@@ -36,8 +40,9 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	//passString << "Rendering pass 1 of " << std::max(1, AA_passes) << "...";
 	//Y_INFO << integratorName << ": " << passString.str() << std::endl;
 
+	//passString << "Render Start!!!" <<std::endl;
 
-	if(intpb) intpb->setTag(passString.str().c_str());
+	//if(intpb) intpb->setTag("Render Start!!!"); 
 
 	gTimer.addEvent("rendert");
 	gTimer.start("rendert");
@@ -80,12 +85,16 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	// initialize SPPM statistics
 	float initialRadius = ((bBox.longX() + bBox.longY() + bBox.longZ()) / 3.f) / ((camera->resX() + camera->resY()) / 2.0f) * 2.f ;
 	
-	std::vector<shared_statistics>::iterator itr;
-	for(itr = progressiveData.begin(); itr != progressiveData.end(); itr++)
+	int size = camera->resX() * camera->resY();
+	for(int i = 0; i < size; i++)
 	{
-		itr->accflux = colorA_t(0.f);
-		itr->photoncount = 0;
-		itr->radius = initialRadius;
+		shared_statistics ts;
+
+		ts.accflux = colorA_t(0.f);
+		ts.photoncount = 0;
+		ts.radius = initialRadius;
+
+		progressiveData.push_back(ts);
 	}
 	
   //  //
@@ -107,6 +116,7 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 
 bool SPPM::renderPass(int samples,int offset, bool adaptive)
 {
+	prePass(samples, offset, adaptive);
 	renderArea_t a;
 	while(imageFilm->nextArea(a))
 	{
@@ -230,7 +240,7 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 }
 
 //photon pass, scatter photon 
-bool SPPM::prepass(int samples, int offset, bool adaptive)
+void SPPM::prePass(int samples, int offset, bool adaptive)
 {
 	std::stringstream set;
 	gTimer.addEvent("prepass");
@@ -329,7 +339,7 @@ bool SPPM::prepass(int samples, int offset, bool adaptive)
 	
 	while(!done)
 	{
-		if(scene->getSignals() & Y_SIG_ABORT) {  pb->done(); if(!intpb) delete pb; return false; }
+		if(scene->getSignals() & Y_SIG_ABORT) {  pb->done(); if(!intpb) delete pb; return; }
 		//state.chromatic = true;
 		//state.wavelength = scrHalton(5, curr);
 
@@ -340,7 +350,7 @@ bool SPPM::prepass(int samples, int offset, bool adaptive)
 
 		sL = float(curr) * invDiffPhotons;
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
-		if(lightNum >= numDLights){ Y_ERROR << integratorName << ": lightPDF sample error! "<<sL<<"/"<<lightNum<<"... stopping now.\n"; delete lightPowerD; return false; }
+		if(lightNum >= numDLights){ Y_ERROR << integratorName << ": lightPDF sample error! "<<sL<<"/"<<lightNum<<"... stopping now.\n"; delete lightPowerD; return; }
 
 		pcol = tmplights[lightNum]->emitPhoton(s1, s2, s3, s4, ray, lightPdf);
 		ray.tmin = MIN_RAYDIST;
@@ -475,7 +485,7 @@ bool SPPM::prepass(int samples, int offset, bool adaptive)
 		
 		while(!done)
 		{
-			if(scene->getSignals() & Y_SIG_ABORT) { pb->done(); if(!intpb) delete pb; return false; }
+			if(scene->getSignals() & Y_SIG_ABORT) { pb->done(); if(!intpb) delete pb; return; }
 			state.chromatic = true;
 			state.wavelength = scrHalton(5,curr);
 
@@ -486,7 +496,7 @@ bool SPPM::prepass(int samples, int offset, bool adaptive)
 
 			sL = float(curr) * invCaustPhotons;
 			int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
-			if(lightNum >= numCLights){ Y_ERROR << integratorName << ": lightPDF sample error! "<<sL<<"/"<<lightNum<<"... stopping now.\n"; delete lightPowerD; return false; }
+			if(lightNum >= numCLights){ Y_ERROR << integratorName << ": lightPDF sample error! "<<sL<<"/"<<lightNum<<"... stopping now.\n"; delete lightPowerD; return; }
 
 			pcol = tmplights[lightNum]->emitPhoton(s1, s2, s3, s4, ray, lightPdf);
 			ray.tmin = MIN_RAYDIST;
@@ -600,7 +610,7 @@ bool SPPM::prepass(int samples, int offset, bool adaptive)
 		Y_INFO << integratorName << ": Done.\n";
 	}
 
-	if(diffuseMap.nPhotons() < 50) { Y_ERROR << integratorName << ": Too few diffuse photons, stopping now.\n"; return false; }
+	if(diffuseMap.nPhotons() < 50) { Y_ERROR << integratorName << ": Too few diffuse photons, stopping now.\n"; return; }
 	
 	
 	tmplights.clear();
@@ -611,7 +621,7 @@ bool SPPM::prepass(int samples, int offset, bool adaptive)
 	gTimer.stop("prepass");
 	Y_INFO << integratorName << ": Photonmap building time: " << gTimer.getTime("prepass") << "\n";
 
-	return true;
+	return;
 }
 
 
@@ -656,6 +666,7 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 		color_t sum(0.0);
 		if(nGathered > 0)
 		{
+			curPhotons += nGathered;
 			if(nGathered > _nMax)
 			{
 				_nMax = nGathered;
@@ -852,17 +863,17 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	//float cuRad = 23
 
 
-	params.getParam("raydepth", raydepth);
-	params.getParam("photons", numPhotons);
-	params.getParam("cPhotons", numCPhotons);
-	params.getParam("nPassNum", _passNum);
+	//params.getParam("raydepth", raydepth);
+	//params.getParam("photons", numPhotons);
+	//params.getParam("cPhotons", numCPhotons);
+	//params.getParam("nPassNum", _passNum);
 	//params.getParam("diffuseRadius", dsRad);
 	//params.getParam("causticRadius", cRad);
 	//params.getParam("radius", curRad);
 	//params.getParam("search", search); // FIXED
 	//caustic_mix = search;
-	params.getParam("caustic_mix", caustic_mix);
-	params.getParam("bounces", bounces);
+	//params.getParam("caustic_mix", caustic_mix);
+	//params.getParam("bounces", bounces);
 
 
 	

@@ -43,7 +43,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 
 
 	virtual bool preprocess(); //not used for now
-	virtual bool prepass(int samples, int offset, bool adaptive); // photon pass
+	virtual void prePass(int samples, int offset, bool adaptive); // photon pass
 	virtual colorA_t integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const; // eye pass
 	static integrator_t* factory(paraMap_t &params, renderEnvironment_t &render); //not implementd now
 
@@ -63,7 +63,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 	float curRadius; // the refine radius for each pixel during each pass
 	unsigned int totalnPhotons; // amount used to normalize photon energy
 	unsigned int totalnCausPhotons;
-	unsigned int curPhotons; // the accumulate amout for each pixel during each pass
+	unsigned int mutable curPhotons; // the accumulate amout for each pixel during each pass
 
 	std::vector<shared_statistics>progressiveData; // per-pixel refine data
 
