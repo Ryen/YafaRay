@@ -92,7 +92,7 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 
 		ts.accflux = colorA_t(0.f);
 		ts.photoncount = 0;
-		ts.radius = initialRadius;
+		ts.radius = initialRadius * 2.f;
 
 		progressiveData.push_back(ts);
 	}
@@ -212,12 +212,15 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 
 				// progressive refinement
 				const float _alpha = 0.8;
-				float g = std::min((temp.photoncount + _alpha * curPhotons) / (temp.photoncount + curPhotons), 1.0f);
-				temp.radius = temp.radius * sqrt(g);
-				temp.photoncount += curPhotons * _alpha;
-				temp.accflux = (temp.accflux + flux) * g;				
+				float g = 1.0f;
+				if(curPhotons != 0)
+				{
+					float g = std::min((temp.photoncount + _alpha * curPhotons) / (temp.photoncount + curPhotons), 1.0f);
+					temp.radius = temp.radius * sqrt(g);
+					temp.photoncount += curPhotons * _alpha;
+					temp.accflux = (temp.accflux + flux) * g;		
+				}
 				
-
 				//radiance estimate
 				colorA_t color = temp.accflux / (temp.radius * temp.radius * 3.141592 * totalnPhotons);				
 				imageFilm->addSample(wt * color, j, i, dx, dy, &a);
@@ -658,7 +661,7 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 
         // remove FG here
 		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nSearch * sizeof(foundPhoton_t)); //need to be removed
-		PFLOAT radius = curRadius;    //actually the square radius... used for SPPM
+		PFLOAT radius = curRadius * curRadius;    //actually the square radius... used for SPPM
 
 		int nGathered=0;
 		
@@ -853,9 +856,9 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 {
 	//int shadowDepth=5; //may used 
 	int raydepth=5;
-	int _passNum = 10000;
-	int numPhotons = 100000;
-	int numCPhotons = 500000;
+	int _passNum = 1000;
+	int numPhotons = 500000;
+	int numCPhotons = 10;//500000;
 	int search = 100000; //need consider carefully
 	int caustic_mix = 500000; // same as above
 	int bounces = 5;

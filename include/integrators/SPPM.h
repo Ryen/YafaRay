@@ -63,7 +63,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 	float curRadius; // the refine radius for each pixel during each pass
 	unsigned int totalnPhotons; // amount used to normalize photon energy
 	unsigned int totalnCausPhotons;
-	unsigned int mutable curPhotons; // the accumulate amout for each pixel during each pass
+	mutable unsigned int  curPhotons; // the accumulate amout for each pixel during each pass
 
 	std::vector<shared_statistics>progressiveData; // per-pixel refine data
 
