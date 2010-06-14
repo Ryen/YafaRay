@@ -27,13 +27,13 @@ typedef struct shared_statistics // per-pixel amount
 	unsigned int photoncount;
 	float radius; // refine amount
 	colorA_t accflux; // accumulated flux
-};
+}PixelData;
 
 
 class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 {
 	public:
-	SPPM(unsigned int dPhotons, unsigned int cPhotons, int passnum);
+	SPPM(unsigned int dPhotons, int passnum);
 	~SPPM();
 	virtual bool render(imageFilm_t *imageFilm);
 	/*! render a pass; only required by the default implementation of render() */
@@ -54,16 +54,17 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 	bool hasBGLight;
 	std::string settings;
 	pdf1D_t *lightPowerD;
-	unsigned int nPhotons; //diffuse photon number to scatter
-	unsigned int nCausPhotons; //caustic photon number
+	unsigned int nPhotons; //photon number to scatter
+	//unsigned int nCausPhotons; //caustic photon number
 	int sDepth, rDepth, maxBounces, nSearch, nCausSearch;// need to be remove
 	int passNum; // the progressive pass number
-	float dsRadius; //need to be remove
-	float cRadius; //same as above
+	//float dsRadius; //need to be remove
+	//float cRadius; //same as above
 	float curRadius; // the refine radius for each pixel during each pass
 	unsigned int totalnPhotons; // amount used to normalize photon energy
-	unsigned int totalnCausPhotons;
+	//unsigned int totalnCausPhotons;
 	mutable unsigned int  curPhotons; // the accumulate amout for each pixel during each pass
+	mutable colorA_t directColor;
 
 	std::vector<shared_statistics>progressiveData; // per-pixel refine data
 
