@@ -391,6 +391,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 				if( 1 || !causticPhoton)
 				{
 					photon_t np(wi, sp.P, pcol);// pcol used here
+					np.shadeN = sp.Ng;
 					diffuseMap.pushPhoton(np);
 					diffuseMap.setNumPaths(curr); // fixed it
 				}
@@ -509,7 +510,6 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 		//color_t sum(0.0);
 		if(nGathered > 0)
 		{
-			curPhotons += nGathered;
 			if(nGathered > _nMax)
 			{
 				_nMax = nGathered;
@@ -520,9 +520,13 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 			float scale = 1.f; //1.f / ( float(diffuseMap.nPaths()) * radius * M_PI); // scale for energy normolize
 			for(int i=0; i<nGathered; ++i)
 			{
-				vector3d_t pdir = gathered[i].photon->direction();
-				color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE);
-				col += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+				if( vector3d_t( gathered[i].photon->shadeN).normalize() * sp.Ng.normalize() > 0.5f ) // using copy constructor to removing the const effect 
+				{
+					curPhotons++;
+					vector3d_t pdir = gathered[i].photon->direction();
+					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE); // need to change for BRDF
+					col += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+				}
 			}
 		}
 
