@@ -15,6 +15,7 @@ SPPM::SPPM(unsigned int dPhotons, int _passnum)
 	//nSearch = dPhotons; // need to find all photons in the region. But this setting may cause stack overflow;
 	passNum = _passnum;
 	totalnPhotons = 0;
+	initialFactor = 1.f;
 }
 
 SPPM::~SPPM()
@@ -40,7 +41,7 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 
 	//passString << "Render Start!!!" <<std::endl;
 
-	if(intpb) intpb->setTag("Render Start!!!"); 
+	//if(intpb) intpb->setTag("Render Start!!!"); 
 
 	gTimer.addEvent("rendert");
 	gTimer.start("rendert");
@@ -54,7 +55,6 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 
 	point3d_t a(1e38f,1e38f,1e38f);
 	point3d_t g(0.f, 0.f, 0.f); // Is it right for the initial g point?
-
 	bound_t bBox(a, g);
 
 	if(scene->doDepth()) //  Use it to set get scene BBox.
@@ -64,7 +64,7 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 		int end_x=camera->resX(), end_y=camera->resY();
 		float wt = 0.f;
 		surfacePoint_t sp;
-		
+
 		for(int i=0; i<end_y; ++i)
 		{
 			for(int j=0; j<end_x; ++j)
@@ -80,9 +80,12 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 		if(maxDepth > 0.f) maxDepth = 1.f / (maxDepth - minDepth);
 	}
 
+	bBox = scene->getSceneBound(); // Now using Scene Bound 
 	// initialize SPPM statistics
 	float initialRadius = ((bBox.longX() + bBox.longY() + bBox.longZ()) / 3.f) / ((camera->resX() + camera->resY()) / 2.0f) * 2.f ;
-	
+
+	initialRadius = std::min(initialRadius, 1.f); //Fix the overflow bug
+
 	int size = camera->resX() * camera->resY();
 	for(int i = 0; i < size; i++)
 	{
@@ -90,11 +93,14 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 
 		ts.accflux = colorA_t(0.f);
 		ts.photoncount = 0;
-		ts.radius = initialRadius * 8.f;
+		ts.radius2 = (initialRadius * initialFactor) * (initialRadius * initialFactor);
+
+		ts.acclightsource = colorA_t(0.f);
+		ts.constanthits = 0;
+		ts.surfacehits = 0;
 
 		progressiveData.push_back(ts);
 	}
-	
 
 	renderPass(1, 0, false);
 
@@ -103,7 +109,9 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 		if(scene->getSignals() & Y_SIG_ABORT) break;
 		//imageFilm->setAAThreshold(AA_threshold);
 		imageFilm->nextPass(false, integratorName);
+		nRefined = 0;
 		renderPass(1, 1 + (i-1)*1, false); // offset seems only used for sampling?
+		std::cout<<  "This pass refined "<<nRefined<<" of "<<size<<" pixels."<<"\n";
 	}
 	maxDepth = 0.f;
 	gTimer.stop("rendert");
@@ -150,10 +158,6 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 		{
 			if(scene->getSignals() & Y_SIG_ABORT) break;
 
-			//if(adaptive) // now not need for sppm
-			//{
-			//	if(!imageFilm->doMoreSamples(j, i)) continue;
-			//}
 			rstate.pixelNumber = x*i+j;
 			rstate.samplingOffs = fnv_32a_buf(i*fnv_32a_buf(j));//fnv_32a_buf(rstate.pixelNumber);
 			float toff = scrHalton(5, pass_offs+rstate.samplingOffs); // **shall be just the pass number...**
@@ -169,11 +173,6 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				dx = RI_S(rstate.pixelSample, rstate.samplingOffs);
 				dy = RI_vdC(rstate.pixelSample, rstate.samplingOffs);
 
-				//else if(n_samples > 1) //not need now
-				//{
-				//	dx = (0.5+(PFLOAT)sample)*d1;
-				//	dy = RI_LP(sample+rstate.samplingOffs);
-				//}
 				if(sampleLns)
 				{
 					lens_u = scrHalton(3, rstate.pixelSample+rstate.samplingOffs);
@@ -202,7 +201,8 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				shared_statistics &temp = progressiveData[index];
 
 				curPhotons = 0;
-				curRadius = temp.radius;
+				constantColor = colorA_t(0.f);
+				curRadius2 = temp.radius2;
 				colorA_t flux = integrate(rstate, c_ray); // L_o
 				flux *= scene->volIntegrator->transmittance(rstate, c_ray); // T
 				flux += scene->volIntegrator->integrate(rstate, c_ray); // L_v
@@ -210,19 +210,30 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				// progressive refinement
 				const float _alpha = 0.7;
 				float g = 1.0f;
-				if(curPhotons != 0)
+
+				// The author's refine formular
+				//if(curPhotons != 0)
+				//{
+				//	float g = std::min((temp.photoncount + _alpha * curPhotons) / (temp.photoncount + curPhotons), 1.0f);
+				//	temp.radius = temp.radius * sqrt(g);
+				//	temp.photoncount += curPhotons * _alpha;
+				//	temp.accflux = (temp.accflux + flux) * g;		
+				//}
+
+				//Dade's formula, need to fix
+				if(curPhotons > 0)
 				{
-					float g = std::min((temp.photoncount + _alpha * curPhotons) / (temp.photoncount + curPhotons), 1.0f);
-					temp.radius = temp.radius * sqrt(g);
-					temp.photoncount += curPhotons * _alpha;
-					temp.accflux = (temp.accflux + flux) * g;		
+						const unsigned long long pcount = temp.photoncount + curPhotons;
+						const float g = _alpha * pcount / (temp.photoncount * _alpha + curPhotons);
+						temp.photoncount = pcount;
+						temp.accflux = (temp.accflux + flux) * g;
+						temp.radius2 *= g;
+						nRefined++;
 				}
-				
 				//radiance estimate
-				colorA_t color = temp.accflux / (temp.radius * temp.radius * M_PI * totalnPhotons);
-				imageFilm->addSample(wt * color, j, i, dx, dy, &a);
-				
-				
+				colorA_t color = temp.accflux / (temp.radius2 * M_PI * totalnPhotons);
+				imageFilm->addSample(wt * (color+constantColor), j, i, dx, dy, &a);
+
 				if(do_depth) // need to know how it works
 				{
 					float depth = 0.f;
@@ -319,8 +330,10 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	state.cam = scene->getCamera();
 	progressBar_t *pb;
 	int pbStep;
-	if(intpb) pb = intpb;
-	else pb = new ConsoleProgressBar_t(80);
+	if(intpb) 
+		pb = intpb;
+	else 
+		pb = new ConsoleProgressBar_t(80);
 	
 	Y_INFO << integratorName << ": Building photon map...\n";
 	
@@ -336,11 +349,17 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		if(scene->getSignals() & Y_SIG_ABORT) {  pb->done(); if(!intpb) delete pb; return; }
 		//state.chromatic = true;
 		//state.wavelength = scrHalton(5, curr);
+		
+		//s1 = RI_vdC(curr+offset);
+		//s2 = scrHalton(2, curr+offset);
+		//s3 = scrHalton(3, curr+offset);
+		//s4 = scrHalton(4, curr+offset);
 
-		s1 = RI_vdC(curr+offset);
-		s2 = scrHalton(2, curr+offset);
-		s3 = scrHalton(3, curr+offset);
-		s4 = scrHalton(4, curr+offset);
+		s1 = ourRandom();
+		s2 = ourRandom();
+		s3 = ourRandom();
+		s4 = ourRandom();
+
 
 		sL = float(curr) * invDiffPhotons;
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
@@ -350,7 +369,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		ray.tmin = MIN_RAYDIST;
 		ray.tmax = -1.0;
 		pcol *= fNumLights*lightPdf/lightNumPdf; //remember that lightPdf is the inverse of th pdf, hence *=...
-		
+
 		if(pcol.isBlack())
 		{
 			++curr;
@@ -398,18 +417,23 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 
 			}
 			// need to break in the middle otherwise we scatter the photon and then discard it => redundant
-			if(nBounces == maxBounces) break;
-			// scatter photon
-			int d5 = 3*nBounces + 5;
+			//if(nBounces == maxBounces)break;  
 
-			s5 = scrHalton(d5, curr);
-			s6 = scrHalton(d5+1, curr);
-			s7 = scrHalton(d5+2, curr);
+			// scatter photon
+			//int d5 = 3*nBounces + 5;
+
+			//s5 = scrHalton(d5, curr);
+			//s6 = scrHalton(d5+1, curr);
+			//s7 = scrHalton(d5+2, curr);
+
+			s5 = ourRandom();
+			s6 = ourRandom();
+			s7 = ourRandom();
 			
 			pSample_t sample(s5, s6, s7, BSDF_ALL, pcol, transm);
 
 			bool scattered = material->scatterPhoton(state, sp, wi, wo, sample);
-			if(!scattered) break; //photon was absorped.
+			if(!scattered) break; //photon was absorped.  
 
 			pcol = sample.color;
 
@@ -422,6 +446,15 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			ray.tmin = MIN_RAYDIST;
 			ray.tmax = -1.0;
 			++nBounces;
+
+			// Russian Roulette
+			if(nBounces > 3)
+			{
+				float continueProbability = 0.75f;
+				if (ourRandom() > continueProbability) break;
+				pcol *= 1.f / continueProbability;
+			}
+
 		}
 		++curr;
 		if(curr % pbStep == 0) pb->update();
@@ -459,7 +492,6 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	return;
 }
 
-
 //collect photon information, it should return non-normalized flux for each pixel.
 colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const
 {
@@ -486,7 +518,7 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 		vector3d_t wo = -ray.dir;
 		const material_t *material = sp.material;
 		material->initBSDF(state, sp, bsdfs);
-		col += material->emit(state, sp, wo);
+		constantColor += material->emit(state, sp, wo);
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
 
@@ -501,13 +533,15 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 		}
 		else
 		{
-		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nSearch * sizeof(foundPhoton_t)); //need to be removed
-		PFLOAT radius = curRadius * curRadius;    //actually the square radius... used for SPPM
+		
+		PFLOAT radius = curRadius2;    //actually the square radius... used for SPPM
 
+		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nSearch * sizeof(foundPhoton_t)); //need to be removed
 		int nGathered=0;
 		
 		if(diffuseMap.nPhotons() > 0) nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius); //the photon gatherd function, need to be changed
-		//color_t sum(0.0);
+
+
 		if(nGathered > 0)
 		{
 			if(nGathered > _nMax)
@@ -520,22 +554,21 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 			float scale = 1.f; //1.f / ( float(diffuseMap.nPaths()) * radius * M_PI); // scale for energy normolize
 			for(int i=0; i<nGathered; ++i)
 			{
-				if( vector3d_t( gathered[i].photon->shadeN).normalize() * sp.Ng.normalize() > 0.5f ) // using copy constructor to removing the const effect 
+				if( 1 || vector3d_t( gathered[i].photon->shadeN).normalize() * sp.Ng.normalize() > 0.5f ) // using copy constructor to removing the const effect 
 				{
 					curPhotons++;
 					vector3d_t pdir = gathered[i].photon->direction();
-					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE); // need to change for BRDF
+					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_ALL); // need to change for BRDF
 					col += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
 				}
 			}
 		}
-
-		// add caustics  need to be changed for sppm
+		
+		// add caustics need to be changed for sppm
 		//merged into diffuseMap
 		}
 
 		state.raylevel++;
-
 		// glossy are removed now
 		if(state.raylevel <= rDepth)
 		{
@@ -551,7 +584,7 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 				if(reflect)
 				{
 					diffRay_t refRay(sp.P, dir[0], MIN_RAYDIST);
-					spDiff.reflectedRay(ray, refRay);
+					spDiff.reflectedRay(ray, refRay); // compute the ray differentaitl
 					color_t integ = color_t(integrate(state, refRay) );
 					if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
 					{
@@ -583,7 +616,7 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 	{
 		if(background)
 		{
-			col += (*background)(ray, state, false);  //this maybe wrong for sppm
+			constantColor += (*background)(ray, state, false);  //this maybe wrong for sppm
 		}
 	}
 
@@ -597,13 +630,20 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	//int shadowDepth=5; //may used 
 	int raydepth=5;
 	int _passNum = 1000;
-	int numPhotons = 2000000;
+	int numPhotons = 500000;
 	int bounces = 5;
+	float times = 1.f;
+
+    params.getParam("raydepth", raydepth);
+	params.getParam("passNums", _passNum);
+	params.getParam("bounces", bounces);
+	params.getParam("times", times); // initial radius times
 
 	SPPM* ite = new SPPM(numPhotons, _passNum);
 	ite->rDepth = raydepth;
 	ite->nSearch = 10000;
 	ite->maxBounces = bounces;
+	ite->initialFactor = times;
 
 	return ite;
 }
