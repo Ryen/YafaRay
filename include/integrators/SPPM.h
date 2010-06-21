@@ -19,21 +19,28 @@
 #include <integrators/integr_utils.h>
 
 
-
 __BEGIN_YAFRAY
 
 typedef struct shared_statistics // per-pixel amount
 {
-	unsigned long long photoncount;
 	float radius2; // square radius,
-	colorA_t accflux; // accumulated flux
+	unsigned long long accPhotonCount;
+	colorA_t accPhotonFlux; // accumulated flux
 
 	//for constant_color usage
 	colorA_t acclightsource; // accumulated radiance from light source & emiting material
 	unsigned int surfacehits; //not used now
 	unsigned int constanthits; // same as above
-}PixelData;
+}HitPoint;
 
+typedef struct GInfo
+{
+	unsigned long photonCount;
+	colorA_t photonFlux;
+	colorA_t constantRandiance;
+
+	GInfo(){photonCount = 0; photonFlux = colorA_t(0.f); constantRandiance = colorA_t(0.f);}
+}GatherInfo;
 
 class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 {
@@ -46,9 +53,11 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 	/*! render a tile; only required by default implementation of render() */
 	virtual bool renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive, int threadID);
 	virtual bool preprocess(); //not used for now
-	virtual void prePass(int samples, int offset, bool adaptive); // photon pass
-	virtual colorA_t integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const; // eye pass
-	static integrator_t* factory(paraMap_t &params, renderEnvironment_t &render); //not implementd now
+	virtual void prePass(int samples, int offset, bool adaptive); // do a  photon pass
+	virtual colorA_t integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const; // not used now
+	static integrator_t* factory(paraMap_t &params, renderEnvironment_t &render);
+
+	GatherInfo traceGatherRay(renderState_t &state, diffRay_t &ray, HitPoint &hp); //based on integrate method to do the gatering trace, need double-check deadly.
 
 	protected:
 	photonMap_t diffuseMap,causticMap; // photonmap
@@ -73,7 +82,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 
 	unsigned int nRefined; // Debug info: Refined pixel per pass
 
-	std::vector<shared_statistics>progressiveData; // per-pixel refine data
+	std::vector<shared_statistics>hitPoints; // per-pixel refine data
 
 };
 

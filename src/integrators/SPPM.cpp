@@ -48,7 +48,7 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	imageFilm->init(passNum); // need to doule-check how it effect sppm.
 	
 	const camera_t* camera = scene->getCamera();
-	progressiveData.reserve(camera->resX() * camera->resY()); // used for SPPM
+	hitPoints.reserve(camera->resX() * camera->resY()); // used for SPPM
 
 	maxDepth = 0.f;
 	minDepth = 1e38f;
@@ -89,17 +89,17 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	int size = camera->resX() * camera->resY();
 	for(int i = 0; i < size; i++)
 	{
-		shared_statistics ts;
+		HitPoint ts;
 
-		ts.accflux = colorA_t(0.f);
-		ts.photoncount = 0;
+		ts.accPhotonFlux  = colorA_t(0.f);
+		ts.accPhotonCount = 0;
 		ts.radius2 = (initialRadius * initialFactor) * (initialRadius * initialFactor);
 
 		ts.acclightsource = colorA_t(0.f);
 		ts.constanthits = 0;
 		ts.surfacehits = 0;
 
-		progressiveData.push_back(ts);
+		hitPoints.push_back(ts);
 	}
 
 	renderPass(1, 0, false);
@@ -198,14 +198,13 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 
 				//for sppm progressive
 				int index = i*camera->resX() + j; 
-				shared_statistics &temp = progressiveData[index];
+				HitPoint &hp = hitPoints[index];
 
-				curPhotons = 0;
-				constantColor = colorA_t(0.f);
-				curRadius2 = temp.radius2;
-				colorA_t flux = integrate(rstate, c_ray); // L_o
-				flux *= scene->volIntegrator->transmittance(rstate, c_ray); // T
-				flux += scene->volIntegrator->integrate(rstate, c_ray); // L_v
+
+				GatherInfo gInfo = traceGatherRay(rstate, c_ray, hp);
+				gInfo.photonFlux *= scene->volIntegrator->transmittance(rstate, c_ray);
+				gInfo.constantRandiance *= scene->volIntegrator->transmittance(rstate, c_ray);
+				gInfo.constantRandiance += scene->volIntegrator->integrate(rstate, c_ray); // Now using it to simulate for volIntegrator not using PPM
 
 				// progressive refinement
 				const float _alpha = 0.7;
@@ -221,18 +220,22 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				//}
 
 				//Dade's formula, need to fix
-				if(curPhotons > 0)
+				if(gInfo.photonCount > 0)
 				{
-						const unsigned long long pcount = temp.photoncount + curPhotons;
-						const float g = _alpha * pcount / (temp.photoncount * _alpha + curPhotons);
-						temp.photoncount = pcount;
-						temp.accflux = (temp.accflux + flux) * g;
-						temp.radius2 *= g;
-						nRefined++;
+					const unsigned long long pcount = hp.accPhotonCount + gInfo.photonCount;
+					const float g = _alpha * pcount / (hp.accPhotonCount * _alpha + gInfo.photonCount);
+					hp.accPhotonCount = pcount;
+					hp.accPhotonFlux = (hp.accPhotonFlux + gInfo.photonFlux) * g;
+					hp.radius2 *= g;
+					nRefined++;
 				}
+
 				//radiance estimate
-				colorA_t color = temp.accflux / (temp.radius2 * M_PI * totalnPhotons);
-				imageFilm->addSample(wt * (color+constantColor), j, i, dx, dy, &a);
+				colorA_t color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons) + gInfo.constantRandiance;
+				
+				color.A = gInfo.constantRandiance.A; // This line may not needed.
+
+				imageFilm->addSample(wt * color, j, i, dx, dy, &a);
 
 				if(do_depth) // need to know how it works
 				{
@@ -324,7 +327,8 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 
 	
 	surfacePoint_t sp;
-	renderState_t state;
+	random_t prng(offset*(4517)+123);
+	renderState_t state(&prng);
 	unsigned char userdata[USER_DATA_SIZE+7];
 	state.userdata = (void *)( &userdata[7] - ( ((size_t)&userdata[7])&7 ) ); // pad userdata to 8 bytes
 	state.cam = scene->getCamera();
@@ -340,10 +344,14 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	pb->init(128);
 	pbStep = std::max(1U, nPhotons/128);
 	pb->setTag("Building photon map...");
-	//Pregather diffuse photons
+	//Pregather  photons
 
 	float invDiffPhotons = 1.f / (float)nPhotons;
+
+	unsigned int ndPhotonStored = 0;
+	unsigned int ncPhotonStored = 0;
 	
+
 	while(!done)
 	{
 		if(scene->getSignals() & Y_SIG_ABORT) {  pb->done(); if(!intpb) delete pb; return; }
@@ -355,11 +363,10 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		//s3 = scrHalton(3, curr+offset);
 		//s4 = scrHalton(4, curr+offset);
 
-		s1 = ourRandom();
-		s2 = ourRandom();
-		s3 = ourRandom();
-		s4 = ourRandom();
-
+		s1 = ourRandom(); //(*(state.prng))(); 
+		s2 = ourRandom(); //(*(state.prng))(); 
+		s3 = ourRandom(); //(*(state.prng))(); 
+		s4 = ourRandom(); //(*(state.prng))(); 
 
 		sL = float(curr) * invDiffPhotons;
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
@@ -403,21 +410,46 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			vector3d_t wi = -ray.dir, wo;
 			material = sp.material;
 			material->initBSDF(state, sp, bsdfs);
-			
-			if(bsdfs & (BSDF_DIFFUSE))
-			{
-				//deposit photon on surface
-				if( 1 || !causticPhoton)
-				{
-					photon_t np(wi, sp.P, pcol);// pcol used here
-					np.shadeN = sp.Ng;
-					diffuseMap.pushPhoton(np);
-					diffuseMap.setNumPaths(curr); // fixed it
-				}
+		
 
+			//deposit diffuse photon on surface
+			if( (!causticPhoton) && (bsdfs & (BSDF_DIFFUSE)))
+			{		
+				photon_t np(wi, sp.P, pcol);// pcol used here
+				np.shadeN = sp.Ng;
+				diffuseMap.pushPhoton(np);
+				diffuseMap.setNumPaths(curr); 
+				ndPhotonStored++;
 			}
+			//deposit caustic photon on surface       This count method seems not work properly. Need to double-check
+			else if(causticPhoton && (bsdfs & (BSDF_DIFFUSE | BSDF_GLOSSY)))
+			{
+				photon_t np(wi, sp.P, pcol);// pcol used here
+				np.shadeN = sp.Ng;
+				diffuseMap.pushPhoton(np);
+				diffuseMap.setNumPaths(curr); 
+				ncPhotonStored++;
+			}
+			//if(bsdfs & (BSDF_DIFFUSE | BSDF_GLOSSY))
+			//{
+			//	//deposit photon on surface
+			//	if(causticPhoton)
+			//	{
+			//		photon_t np(wi, sp.P, pcol);
+			//		causticMap.pushPhoton(np);
+			//		causticMap.setNumPaths(curr);
+			//		ncPhotonStored++;
+			//	}
+			//	else
+			//	{
+			//		photon_t np(wi, sp.P, pcol);
+			//		diffuseMap.pushPhoton(np);
+			//		diffuseMap.setNumPaths(curr);
+			//		ndPhotonStored++;
+			//	}
+			//}
 			// need to break in the middle otherwise we scatter the photon and then discard it => redundant
-			//if(nBounces == maxBounces)break;  
+			if(nBounces == maxBounces)break;  
 
 			// scatter photon
 			//int d5 = 3*nBounces + 5;
@@ -426,9 +458,9 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			//s6 = scrHalton(d5+1, curr);
 			//s7 = scrHalton(d5+2, curr);
 
-			s5 = ourRandom();
-			s6 = ourRandom();
-			s7 = ourRandom();
+			s5 = ourRandom();  //(*(state.prng))(); //
+			s6 = ourRandom();  //(*(state.prng))(); //
+			s7 = ourRandom();  //(*(state.prng))(); //
 			
 			pSample_t sample(s5, s6, s7, BSDF_ALL, pcol, transm);
 
@@ -441,19 +473,20 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 							((sample.sampledFlags & (BSDF_GLOSSY | BSDF_SPECULAR | BSDF_FILTER | BSDF_DISPERSIVE)) && causticPhoton);
 			directPhoton = (sample.sampledFlags & BSDF_FILTER) && directPhoton;
 
+
 			ray.from = sp.P;
 			ray.dir = wo;
 			ray.tmin = MIN_RAYDIST;
 			ray.tmax = -1.0;
 			++nBounces;
 
-			// Russian Roulette
-			if(nBounces > 3)
-			{
-				float continueProbability = 0.75f;
-				if (ourRandom() > continueProbability) break;
-				pcol *= 1.f / continueProbability;
-			}
+			//// Russian Roulette
+			//if(nBounces > 3)
+			//{
+			//	float continueProbability = 0.75f;
+			//	if (ourRandom() > continueProbability) break;
+			//	pcol *= 1.f / continueProbability;
+			//}
 
 		}
 		++curr;
@@ -464,12 +497,11 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	pb->setTag("Photon map built.");
 	Y_INFO << integratorName << ":Photon map built.\n";
 	Y_INFO << integratorName << ": Shot "<<curr<<" photons from " << numDLights << " light(s)\n";
-
+	Y_INFO << integratorName << ": Stored caustic photons: " << ncPhotonStored << yendl;
+	Y_INFO << integratorName << ": Stored diffuse photons: " << ndPhotonStored << yendl;
 	delete lightPowerD;
 
 	totalnPhotons +=  nPhotons; // used for SPPM
-
-	delete[] energies;
 
 	Y_INFO << integratorName << ": Stored photons: "<<diffuseMap.nPhotons()<<"\n";
 	
@@ -495,13 +527,24 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 //collect photon information, it should return non-normalized flux for each pixel.
 colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const
 {
+	return colorA_t(0.f);	
+}
+
+
+GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_t &ray, yafaray::HitPoint &hp)
+{
 	static int _nMax=0;
 	static int calls=0;
 	++calls;
 	color_t col(0.0);
+	GatherInfo gInfo;
+	gInfo.constantRandiance = colorA_t(0.f);
+	gInfo.photonCount = 0;
+	gInfo.photonFlux = colorA_t(0.f);
+
 	CFLOAT alpha=0.0;
 	surfacePoint_t sp;
-	
+
 	void *o_udat = state.userdata;
 	bool oldIncludeLights = state.includeLights;
 	if(scene->intersect(ray, sp))
@@ -513,6 +556,7 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 			state.chromatic = true;
 			state.includeLights = true;
 		}
+
 		BSDF_t bsdfs;
 		vector3d_t N_nobump = sp.N;
 		vector3d_t wo = -ray.dir;
@@ -524,7 +568,7 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 
         // remove FG here
 		//if(bsdfs & BSDF_DIFFUSE) directColor += estimateDirect_PH(state, sp, lights, scene, wo, false, sDepth);
-		
+
 		if(0)
 		{
 				vector3d_t N = FACE_FORWARD(sp.Ng, sp.N, wo);
@@ -533,15 +577,15 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 		}
 		else
 		{
-		
-		PFLOAT radius = curRadius2;    //actually the square radius... used for SPPM
+
+		PFLOAT radius = hp.radius2;    //actually the square radius... used for SPPM
 
 		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nSearch * sizeof(foundPhoton_t)); //need to be removed
 		int nGathered=0;
 		
 		if(diffuseMap.nPhotons() > 0) nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius); //the photon gatherd function, need to be changed
 
-
+		
 		if(nGathered > 0)
 		{
 			if(nGathered > _nMax)
@@ -550,16 +594,15 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 				std::cout << "maximum Photons: "<<_nMax<<", radius: "<<radius<<"\n";
 				if(_nMax == 10) for(int j=0; j < nGathered; ++j ) std::cout<<"col:"<<gathered[j].photon->color()<<"\n";
 			}
-
 			float scale = 1.f; //1.f / ( float(diffuseMap.nPaths()) * radius * M_PI); // scale for energy normolize
 			for(int i=0; i<nGathered; ++i)
 			{
 				if( 1 || vector3d_t( gathered[i].photon->shadeN).normalize() * sp.Ng.normalize() > 0.5f ) // using copy constructor to removing the const effect 
 				{
-					curPhotons++;
+					gInfo.photonCount++;
 					vector3d_t pdir = gathered[i].photon->direction();
 					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_ALL); // need to change for BRDF
-					col += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+					gInfo.photonFlux += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
 				}
 			}
 		}
@@ -572,6 +615,123 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 		// glossy are removed now
 		if(state.raylevel <= rDepth)
 		{
+			// dispersive effects with recursive raytracing:
+			if( (bsdfs & BSDF_DISPERSIVE) && state.chromatic )
+			{
+				state.includeLights = true; //debatable...
+				int dsam = 1;
+				int oldDivision = state.rayDivision;
+				int oldOffset = state.rayOffset;
+				float old_dc1 = state.dc1, old_dc2 = state.dc2;
+				if(state.rayDivision > 1) dsam = std::max(1, dsam/oldDivision);
+				state.rayDivision *= dsam;
+				int branch = state.rayDivision*oldOffset;
+				float d_1 = 1.f/(float)dsam;
+				float ss1 = RI_S(state.pixelSample + state.samplingOffs);
+				color_t dcol(0.f), vcol(1.f);
+				GatherInfo cing;
+				vector3d_t wi;
+				const volumeHandler_t* vol;
+				diffRay_t refRay;
+				for(int ns=0; ns<dsam; ++ns)
+				{
+					state.wavelength = (ns + ss1)*d_1;
+					state.dc1 = scrHalton(2*state.raylevel+1, branch + state.samplingOffs);
+					state.dc2 = scrHalton(2*state.raylevel+2, branch + state.samplingOffs);
+					if(oldDivision > 1)	state.wavelength = addMod1(state.wavelength, old_dc1);
+					state.rayOffset = branch;
+					++branch;
+					sample_t s(0.5f, 0.5f, BSDF_REFLECT|BSDF_TRANSMIT|BSDF_DISPERSIVE);
+					color_t mcol = material->sample(state, sp, wo, wi, s);
+					if(s.pdf > 1.0e-6f && (s.sampledFlags & BSDF_DISPERSIVE))
+					{
+						mcol *= std::fabs(wi*sp.N)/s.pdf;
+						color_t wl_col;
+						wl2rgb(state.wavelength, wl_col);
+						state.chromatic = false;
+						refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
+						cing = traceGatherRay(state, refRay, hp);
+						cing.photonFlux *= mcol * wl_col;
+						cing.constantRandiance *= mcol * wl_col;
+						state.chromatic = true;
+					}
+				}
+				if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
+				{
+					vol->transmittance(state, refRay, vcol);
+					cing.photonFlux *= vcol;
+					cing.constantRandiance *= vcol;
+				}
+
+				gInfo.constantRandiance += cing.constantRandiance;
+				gInfo.photonFlux += cing.photonFlux;
+				gInfo.photonCount += cing.photonCount;
+
+				state.rayDivision = oldDivision;
+				state.rayOffset = oldOffset;
+				state.dc1 = old_dc1; state.dc2 = old_dc2;
+			}
+			
+			// glossy reflection with recursive raytracing:
+			if( bsdfs & (BSDF_GLOSSY))
+			{
+				state.includeLights = false;
+				int gsam = 1;
+				int oldDivision = state.rayDivision;
+				int oldOffset = state.rayOffset;
+				float old_dc1 = state.dc1, old_dc2 = state.dc2;
+				if(state.rayDivision > 1) gsam = std::max(1, gsam/oldDivision);
+				state.rayDivision *= gsam;
+				int branch = state.rayDivision*oldOffset;
+				int offs = gsam * state.pixelSample + state.samplingOffs;
+				float d_1 = 1.f/(float)gsam;
+				color_t gcol(0.f), vcol(1.f);
+				GatherInfo ging;
+				vector3d_t wi;
+				const volumeHandler_t* vol;
+				diffRay_t refRay;
+				for(int ns=0; ns<gsam; ++ns)
+				{
+					state.dc1 = scrHalton(2*state.raylevel+1, branch + state.samplingOffs);
+					state.dc2 = scrHalton(2*state.raylevel+2, branch + state.samplingOffs);
+					state.rayOffset = branch;
+					++branch;
+					float s1 = RI_vdC(offs + ns);
+					float s2 = scrHalton(2, offs + ns);
+					if(oldDivision > 1) // create generalized halton sequence
+					{
+						s1 = addMod1(s1, old_dc1);
+						s2 = addMod1(s2, old_dc2);
+					}
+					sample_t s(s1, s2, BSDF_REFLECT|BSDF_TRANSMIT|BSDF_GLOSSY);
+					color_t mcol = material->sample(state, sp, wo, wi, s);
+					if(s.pdf > 1.0e-5f && (s.sampledFlags & BSDF_GLOSSY))
+					{
+						mcol *= std::fabs(wi*sp.N)/s.pdf;
+						refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
+						ging = traceGatherRay(state, refRay, hp);
+						ging.photonFlux *=mcol;
+						ging.constantRandiance *= mcol;
+					}
+					
+					if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
+					{
+						if(vol->transmittance(state, refRay, vcol)) 
+						{
+							ging.photonFlux *= vcol;
+							ging.constantRandiance *= vcol;
+						}
+					}
+				}
+				gInfo.constantRandiance += ging.constantRandiance;
+				gInfo.photonFlux += ging.photonFlux;
+				gInfo.photonCount += ging.photonCount;
+
+				//restore renderstate
+				state.rayDivision = oldDivision;
+				state.rayOffset = oldOffset;
+				state.dc1 = old_dc1; state.dc2 = old_dc2;
+			}			
 			//...perfect specular reflection/refraction with recursive raytracing...
 			if(bsdfs & (BSDF_SPECULAR | BSDF_FILTER))
 			{
@@ -585,24 +745,36 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 				{
 					diffRay_t refRay(sp.P, dir[0], MIN_RAYDIST);
 					spDiff.reflectedRay(ray, refRay); // compute the ray differentaitl
-					color_t integ = color_t(integrate(state, refRay) );
+					GatherInfo refg = traceGatherRay(state, refRay, hp);
 					if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
 					{
-						if(vol->transmittance(state, refRay, vcol)) integ *= vcol;
+						if(vol->transmittance(state, refRay, vcol)) 
+						{
+							refg.constantRandiance *= vcol;
+							refg.photonFlux *= vcol;
+						}
 					}
-					col += integ * rcol[0];
+					gInfo.constantRandiance += refg.constantRandiance * colorA_t(rcol[0]);
+					gInfo.photonFlux += refg.photonFlux * colorA_t(rcol[0]);
+					gInfo.photonCount += refg.photonCount;
 				}
 				if(refract)
 				{
 					diffRay_t refRay(sp.P, dir[1], MIN_RAYDIST);
 					spDiff.refractedRay(ray, refRay, material->getMatIOR());
-					colorA_t integ = integrate(state, refRay);
+					GatherInfo refg = traceGatherRay(state, refRay, hp);
 					if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
 					{
-						if(vol->transmittance(state, refRay, vcol)) integ *= vcol;
+						if(vol->transmittance(state, refRay, vcol)) 
+						{
+							refg.constantRandiance *= vcol;
+							refg.photonFlux *= vcol;
+						}
 					}
-					col += color_t(integ) * rcol[1];
-					alpha = integ.A;
+					gInfo.constantRandiance += refg.constantRandiance * colorA_t(rcol[1]);
+					gInfo.photonFlux += refg.photonFlux * colorA_t(rcol[1]);
+					gInfo.photonCount += refg.photonCount;
+					alpha = refg.constantRandiance.A;
 				}
 			}			
 		}
@@ -616,25 +788,29 @@ colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*
 	{
 		if(background)
 		{
-			constantColor += (*background)(ray, state, false);  //this maybe wrong for sppm
+			gInfo.constantRandiance += (*background)(ray, state, false);  //this maybe wrong for sppm
 		}
 	}
 
 	state.userdata = o_udat;
 	state.includeLights = oldIncludeLights;
-	return colorA_t(col, alpha);	
+
+	gInfo.constantRandiance.A = alpha;
+	return gInfo;
+
 }
 
 integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 {
-	//int shadowDepth=5; //may used 
+	//int shadowDepth=5; //may used when integrate Direct Light
 	int raydepth=5;
 	int _passNum = 1000;
-	int numPhotons = 500000;
+	int numPhotons = 200000;
 	int bounces = 5;
 	float times = 1.f;
 
-    params.getParam("raydepth", raydepth);
+	params.getParam("raydepth", raydepth);
+	params.getParam("photons", numPhotons);
 	params.getParam("passNums", _passNum);
 	params.getParam("bounces", bounces);
 	params.getParam("times", times); // initial radius times
@@ -643,7 +819,7 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	ite->rDepth = raydepth;
 	ite->nSearch = 10000;
 	ite->maxBounces = bounces;
-	ite->initialFactor = times;
+	ite->initialFactor = 1.f;
 
 	return ite;
 }
