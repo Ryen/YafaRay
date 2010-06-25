@@ -40,7 +40,16 @@ typedef struct GInfo
 	colorA_t constantRandiance;
 
 	GInfo(){photonCount = 0; photonFlux = colorA_t(0.f); constantRandiance = colorA_t(0.f);}
+
+	GInfo & operator +=(const GInfo &g)
+	{ 
+		photonCount += g.photonCount; 
+		photonFlux += g.photonFlux;
+		constantRandiance += g.constantRandiance;
+		return (*this);
+	}
 }GatherInfo;
+
 
 class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 {
@@ -57,7 +66,9 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 	virtual colorA_t integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const; // not used now
 	static integrator_t* factory(paraMap_t &params, renderEnvironment_t &render);
 
+	void initializePPM(bool us_PM);
 	GatherInfo traceGatherRay(renderState_t &state, diffRay_t &ray, HitPoint &hp); //based on integrate method to do the gatering trace, need double-check deadly.
+	void traceIRERay(renderState_t &state, diffRay_t &ray, HitPoint &hp); //based on integrate method
 
 	protected:
 	photonMap_t diffuseMap,causticMap; // photonmap
@@ -67,10 +78,9 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 	std::string settings;
 	pdf1D_t *lightPowerD;
 	unsigned int nPhotons; //photon number to scatter
-	int sDepth, rDepth, maxBounces, nSearch, nCausSearch;// need to be remove
+	int sDepth, rDepth, maxBounces, nSearch, nCausSearch;// now used to do inital radius estimate
 	int passNum; // the progressive pass number
 	float curRadius2; // the refine square radius for each pixel during each pass
-	mutable float firstRadius;// initial radius estimate, not used now
 	float initialFactor; // used to time the initial radius
 	unsigned int totalnPhotons; // amount used to normalize photon energy
 	//unsigned int totalnCausPhotons;
@@ -78,7 +88,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 	//mutable bool Isconstantcolor;
 	mutable colorA_t constantColor; // used to collect light source's & emiting material's radiance
 	mutable colorA_t directColor; //not used now
-	bool firstPass; //used for inital radius estimate
+	bool PM_IRE; //use PM for initial radius estimate
 
 	unsigned int nRefined; // Debug info: Refined pixel per pass
 

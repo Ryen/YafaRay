@@ -4,6 +4,7 @@
 #include <algorithm>
 __BEGIN_YAFRAY
 
+const int nMaxGather = 10000; //used to gather all the photon in the radius.
 
 SPPM::SPPM(unsigned int dPhotons, int _passnum)
 {
@@ -48,14 +49,14 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	imageFilm->init(passNum); // need to doule-check how it effect sppm.
 	
 	const camera_t* camera = scene->getCamera();
-	hitPoints.reserve(camera->resX() * camera->resY()); // used for SPPM
+	//hitPoints.reserve(camera->resX() * camera->resY()); // used for SPPM
 
 	maxDepth = 0.f;
 	minDepth = 1e38f;
 
-	point3d_t a(1e38f,1e38f,1e38f);
-	point3d_t g(0.f, 0.f, 0.f); // Is it right for the initial g point?
-	bound_t bBox(a, g);
+	//point3d_t a(1e38f,1e38f,1e38f);
+	//point3d_t g(0.f, 0.f, 0.f); // Is it right for the initial g point?
+	//bound_t bBox(a, g);
 
 	if(scene->doDepth()) //  Use it to set get scene BBox.
 	{
@@ -74,36 +75,24 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 				scene->intersect(c_ray, sp);
 				if(c_ray.tmax > maxDepth) maxDepth = c_ray.tmax;
 				if(c_ray.tmax < minDepth && c_ray.tmax >= 0.f) minDepth = c_ray.tmax;
-				bBox.include(sp.P);
+				//bBox.include(sp.P);
 			}
 		}
 		if(maxDepth > 0.f) maxDepth = 1.f / (maxDepth - minDepth);
 	}
 
-	bBox = scene->getSceneBound(); // Now using Scene Bound 
-	// initialize SPPM statistics
-	float initialRadius = ((bBox.longX() + bBox.longY() + bBox.longZ()) / 3.f) / ((camera->resX() + camera->resY()) / 2.0f) * 2.f ;
-
-	initialRadius = std::min(initialRadius, 1.f); //Fix the overflow bug
-
-	int size = camera->resX() * camera->resY();
-	for(int i = 0; i < size; i++)
-	{
-		HitPoint ts;
-
-		ts.accPhotonFlux  = colorA_t(0.f);
-		ts.accPhotonCount = 0;
-		ts.radius2 = (initialRadius * initialFactor) * (initialRadius * initialFactor);
-
-		ts.acclightsource = colorA_t(0.f);
-		ts.constanthits = 0;
-		ts.surfacehits = 0;
-
-		hitPoints.push_back(ts);
-	}
+	initializePPM(PM_IRE);
 
 	renderPass(1, 0, false);
 
+	if(PM_IRE)
+	{
+		totalnPhotons = 0;
+		PM_IRE = false;
+	}
+
+
+	int size = camera->resX() * camera->resY();
 	for(int i=0; i<passNum; ++i) // progress pass
 	{
 		if(scene->getSignals() & Y_SIG_ABORT) break;
@@ -200,6 +189,11 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				int index = i*camera->resX() + j; 
 				HitPoint &hp = hitPoints[index];
 
+				if(PM_IRE)
+				{
+					traceIRERay(rstate, c_ray, hp);
+					continue;
+				}
 
 				GatherInfo gInfo = traceGatherRay(rstate, c_ray, hp);
 				gInfo.photonFlux *= scene->volIntegrator->transmittance(rstate, c_ray);
@@ -231,7 +225,7 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				}
 
 				//radiance estimate
-				colorA_t color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons) + gInfo.constantRandiance;
+				colorA_t color = hp.accPhotonFlux / (/* hp.radius2 * M_PI * */totalnPhotons) + gInfo.constantRandiance;
 				
 				color.A = gInfo.constantRandiance.A; // This line may not needed.
 
@@ -355,18 +349,18 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	while(!done)
 	{
 		if(scene->getSignals() & Y_SIG_ABORT) {  pb->done(); if(!intpb) delete pb; return; }
-		//state.chromatic = true;
-		//state.wavelength = scrHalton(5, curr);
+		state.chromatic = true;
+		state.wavelength = scrHalton(5, curr);
 		
-		//s1 = RI_vdC(curr+offset);
-		//s2 = scrHalton(2, curr+offset);
-		//s3 = scrHalton(3, curr+offset);
-		//s4 = scrHalton(4, curr+offset);
+		s1 = RI_vdC(curr+offset);
+		s2 = scrHalton(2, curr+offset);
+		s3 = scrHalton(3, curr+offset);
+		s4 = scrHalton(4, curr+offset);
 
-		s1 = ourRandom(); //(*(state.prng))(); 
-		s2 = ourRandom(); //(*(state.prng))(); 
-		s3 = ourRandom(); //(*(state.prng))(); 
-		s4 = ourRandom(); //(*(state.prng))(); 
+		//s1 = ourRandom(); //(*(state.prng))(); 
+		//s2 = ourRandom(); //(*(state.prng))(); 
+		//s3 = ourRandom(); //(*(state.prng))(); 
+		//s4 = ourRandom(); //(*(state.prng))(); 
 
 		sL = float(curr) * invDiffPhotons;
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
@@ -452,15 +446,15 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			if(nBounces == maxBounces)break;  
 
 			// scatter photon
-			//int d5 = 3*nBounces + 5;
+			int d5 = 3*nBounces + 5;
 
-			//s5 = scrHalton(d5, curr);
-			//s6 = scrHalton(d5+1, curr);
-			//s7 = scrHalton(d5+2, curr);
+			s5 = scrHalton(d5, curr);
+			s6 = scrHalton(d5+1, curr);
+			s7 = scrHalton(d5+2, curr);
 
-			s5 = ourRandom();  //(*(state.prng))(); //
-			s6 = ourRandom();  //(*(state.prng))(); //
-			s7 = ourRandom();  //(*(state.prng))(); //
+			//s5 = ourRandom();  //(*(state.prng))(); //
+			//s6 = ourRandom();  //(*(state.prng))(); //
+			//s7 = ourRandom();  //(*(state.prng))(); //
 			
 			pSample_t sample(s5, s6, s7, BSDF_ALL, pcol, transm);
 
@@ -501,7 +495,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	Y_INFO << integratorName << ": Stored diffuse photons: " << ndPhotonStored << yendl;
 	delete lightPowerD;
 
-	totalnPhotons +=  nPhotons; // used for SPPM
+	totalnPhotons +=  diffuseMap.nPaths();//nPhotons; // used for SPPM
 
 	Y_INFO << integratorName << ": Stored photons: "<<diffuseMap.nPhotons()<<"\n";
 	
@@ -580,10 +574,10 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 
 		PFLOAT radius = hp.radius2;    //actually the square radius... used for SPPM
 
-		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nSearch * sizeof(foundPhoton_t)); //need to be removed
+		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t)); //need to be removed
 		int nGathered=0;
 		
-		if(diffuseMap.nPhotons() > 0) nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius); //the photon gatherd function, need to be changed
+		if(diffuseMap.nPhotons() > 0) nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius); //the photon gatherd function, need to be changed
 
 		
 		if(nGathered > 0)
@@ -594,15 +588,15 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				std::cout << "maximum Photons: "<<_nMax<<", radius: "<<radius<<"\n";
 				if(_nMax == 10) for(int j=0; j < nGathered; ++j ) std::cout<<"col:"<<gathered[j].photon->color()<<"\n";
 			}
-			float scale = 1.f; //1.f / ( float(diffuseMap.nPaths()) * radius * M_PI); // scale for energy normolize
+			float scale = 1.f / (radius * M_PI); // scale for energy normolize
 			for(int i=0; i<nGathered; ++i)
 			{
 				if( 1 || vector3d_t( gathered[i].photon->shadeN).normalize() * sp.Ng.normalize() > 0.5f ) // using copy constructor to removing the const effect 
 				{
 					gInfo.photonCount++;
 					vector3d_t pdir = gathered[i].photon->direction();
-					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_ALL); // need to change for BRDF
-					gInfo.photonFlux += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE); // need to change for BRDF
+					gInfo.photonFlux += surfCol * scale * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
 				}
 			}
 		}
@@ -676,7 +670,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			if( bsdfs & (BSDF_GLOSSY))
 			{
 				state.includeLights = false;
-				int gsam = 1;
+				int gsam = 8;
 				int oldDivision = state.rayDivision;
 				int oldOffset = state.rayOffset;
 				float old_dc1 = state.dc1, old_dc2 = state.dc2;
@@ -709,7 +703,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 					{
 						mcol *= std::fabs(wi*sp.N)/s.pdf;
 						refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
-						ging = traceGatherRay(state, refRay, hp);
+						ging += traceGatherRay(state, refRay, hp);
 						ging.photonFlux *=mcol;
 						ging.constantRandiance *= mcol;
 					}
@@ -723,9 +717,9 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 						}
 					}
 				}
-				gInfo.constantRandiance += ging.constantRandiance;
-				gInfo.photonFlux += ging.photonFlux;
-				gInfo.photonCount += ging.photonCount;
+				gInfo.constantRandiance += ging.constantRandiance * d_1;
+				gInfo.photonFlux += ging.photonFlux * d_1;
+				gInfo.photonCount += ging.photonCount * d_1;
 
 				//restore renderstate
 				state.rayDivision = oldDivision;
@@ -800,6 +794,285 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 
 }
 
+
+
+
+void SPPM::traceIRERay(yafaray::renderState_t &state, yafaray::diffRay_t &ray, yafaray::HitPoint &hp)
+{
+	static int _nMax=0;
+	static int calls=0;
+	++calls;
+	color_t col(0.0);
+	GatherInfo gInfo;
+	gInfo.constantRandiance = colorA_t(0.f);
+	gInfo.photonCount = 0;
+	gInfo.photonFlux = colorA_t(0.f);
+
+	CFLOAT alpha=0.0;
+	surfacePoint_t sp;
+
+	void *o_udat = state.userdata;
+	bool oldIncludeLights = state.includeLights;
+	if(scene->intersect(ray, sp))
+	{
+		unsigned char userdata[USER_DATA_SIZE+7];
+		state.userdata = (void *)( &userdata[7] - ( ((size_t)&userdata[7])&7 ) ); // pad userdata to 8 bytes
+		if(state.raylevel == 0)
+		{
+			state.chromatic = true;
+			state.includeLights = true;
+		}
+
+		BSDF_t bsdfs;
+		vector3d_t N_nobump = sp.N;
+		vector3d_t wo = -ray.dir;
+		const material_t *material = sp.material;
+		material->initBSDF(state, sp, bsdfs);
+		constantColor += material->emit(state, sp, wo);
+		state.includeLights = false;
+		spDifferentials_t spDiff(sp, ray);
+
+        // remove FG here
+		//if(bsdfs & BSDF_DIFFUSE) directColor += estimateDirect_PH(state, sp, lights, scene, wo, false, sDepth);
+
+		if(0)
+		{
+				vector3d_t N = FACE_FORWARD(sp.Ng, sp.N, wo);
+				const photon_t *nearest = diffuseMap.findNearest(sp.P, N, 1.0f);
+				if(nearest) col += nearest->color();
+		}
+		else
+		{
+
+		PFLOAT radius = 1.0f;    //actually the square radius... used for SPPM
+
+		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nSearch * sizeof(foundPhoton_t)); //need to be removed
+		int nGathered=0;
+		
+		if(diffuseMap.nPhotons() > 0) nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius); //the photon gatherd function, need to be changed
+
+		hp.radius2 = radius;
+		
+		// add caustics need to be changed for sppm
+		//merged into diffuseMap
+		}
+
+		//state.raylevel++;
+		//// glossy are removed now
+		//if(state.raylevel <= rDepth)
+		//{
+		//	// dispersive effects with recursive raytracing:
+		//	if( (bsdfs & BSDF_DISPERSIVE) && state.chromatic )
+		//	{
+		//		state.includeLights = true; //debatable...
+		//		int dsam = 1;
+		//		int oldDivision = state.rayDivision;
+		//		int oldOffset = state.rayOffset;
+		//		float old_dc1 = state.dc1, old_dc2 = state.dc2;
+		//		if(state.rayDivision > 1) dsam = std::max(1, dsam/oldDivision);
+		//		state.rayDivision *= dsam;
+		//		int branch = state.rayDivision*oldOffset;
+		//		float d_1 = 1.f/(float)dsam;
+		//		float ss1 = RI_S(state.pixelSample + state.samplingOffs);
+		//		color_t dcol(0.f), vcol(1.f);
+		//		GatherInfo cing;
+		//		vector3d_t wi;
+		//		const volumeHandler_t* vol;
+		//		diffRay_t refRay;
+		//		for(int ns=0; ns<dsam; ++ns)
+		//		{
+		//			state.wavelength = (ns + ss1)*d_1;
+		//			state.dc1 = scrHalton(2*state.raylevel+1, branch + state.samplingOffs);
+		//			state.dc2 = scrHalton(2*state.raylevel+2, branch + state.samplingOffs);
+		//			if(oldDivision > 1)	state.wavelength = addMod1(state.wavelength, old_dc1);
+		//			state.rayOffset = branch;
+		//			++branch;
+		//			sample_t s(0.5f, 0.5f, BSDF_REFLECT|BSDF_TRANSMIT|BSDF_DISPERSIVE);
+		//			color_t mcol = material->sample(state, sp, wo, wi, s);
+		//			if(s.pdf > 1.0e-6f && (s.sampledFlags & BSDF_DISPERSIVE))
+		//			{
+		//				mcol *= std::fabs(wi*sp.N)/s.pdf;
+		//				color_t wl_col;
+		//				wl2rgb(state.wavelength, wl_col);
+		//				state.chromatic = false;
+		//				refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
+		//				cing = traceGatherRay(state, refRay, hp);
+		//				cing.photonFlux *= mcol * wl_col;
+		//				cing.constantRandiance *= mcol * wl_col;
+		//				state.chromatic = true;
+		//			}
+		//		}
+		//		if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
+		//		{
+		//			vol->transmittance(state, refRay, vcol);
+		//			cing.photonFlux *= vcol;
+		//			cing.constantRandiance *= vcol;
+		//		}
+
+		//		gInfo.constantRandiance += cing.constantRandiance;
+		//		gInfo.photonFlux += cing.photonFlux;
+		//		gInfo.photonCount += cing.photonCount;
+
+		//		state.rayDivision = oldDivision;
+		//		state.rayOffset = oldOffset;
+		//		state.dc1 = old_dc1; state.dc2 = old_dc2;
+		//	}
+		//	
+		//	// glossy reflection with recursive raytracing:
+		//	if( bsdfs & (BSDF_GLOSSY))
+		//	{
+		//		state.includeLights = false;
+		//		int gsam = 1;
+		//		int oldDivision = state.rayDivision;
+		//		int oldOffset = state.rayOffset;
+		//		float old_dc1 = state.dc1, old_dc2 = state.dc2;
+		//		if(state.rayDivision > 1) gsam = std::max(1, gsam/oldDivision);
+		//		state.rayDivision *= gsam;
+		//		int branch = state.rayDivision*oldOffset;
+		//		int offs = gsam * state.pixelSample + state.samplingOffs;
+		//		float d_1 = 1.f/(float)gsam;
+		//		color_t gcol(0.f), vcol(1.f);
+		//		GatherInfo ging;
+		//		vector3d_t wi;
+		//		const volumeHandler_t* vol;
+		//		diffRay_t refRay;
+		//		for(int ns=0; ns<gsam; ++ns)
+		//		{
+		//			state.dc1 = scrHalton(2*state.raylevel+1, branch + state.samplingOffs);
+		//			state.dc2 = scrHalton(2*state.raylevel+2, branch + state.samplingOffs);
+		//			state.rayOffset = branch;
+		//			++branch;
+		//			float s1 = RI_vdC(offs + ns);
+		//			float s2 = scrHalton(2, offs + ns);
+		//			if(oldDivision > 1) // create generalized halton sequence
+		//			{
+		//				s1 = addMod1(s1, old_dc1);
+		//				s2 = addMod1(s2, old_dc2);
+		//			}
+		//			sample_t s(s1, s2, BSDF_REFLECT|BSDF_TRANSMIT|BSDF_GLOSSY);
+		//			color_t mcol = material->sample(state, sp, wo, wi, s);
+		//			if(s.pdf > 1.0e-5f && (s.sampledFlags & BSDF_GLOSSY))
+		//			{
+		//				mcol *= std::fabs(wi*sp.N)/s.pdf;
+		//				refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
+		//				ging = traceGatherRay(state, refRay, hp);
+		//				ging.photonFlux *=mcol;
+		//				ging.constantRandiance *= mcol;
+		//			}
+		//			
+		//			if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
+		//			{
+		//				if(vol->transmittance(state, refRay, vcol)) 
+		//				{
+		//					ging.photonFlux *= vcol;
+		//					ging.constantRandiance *= vcol;
+		//				}
+		//			}
+		//		}
+		//		gInfo.constantRandiance += ging.constantRandiance;
+		//		gInfo.photonFlux += ging.photonFlux;
+		//		gInfo.photonCount += ging.photonCount;
+
+		//		//restore renderstate
+		//		state.rayDivision = oldDivision;
+		//		state.rayOffset = oldOffset;
+		//		state.dc1 = old_dc1; state.dc2 = old_dc2;
+		//	}			
+		//	//...perfect specular reflection/refraction with recursive raytracing...
+		//	if(bsdfs & (BSDF_SPECULAR | BSDF_FILTER))
+		//	{
+		//		state.includeLights = true;
+		//		bool reflect=false, refract=false;
+		//		vector3d_t dir[2];
+		//		color_t rcol[2], vcol;
+		//		material->getSpecular(state, sp, wo, reflect, refract, dir, rcol);
+		//		const volumeHandler_t *vol;
+		//		if(reflect)
+		//		{
+		//			diffRay_t refRay(sp.P, dir[0], MIN_RAYDIST);
+		//			spDiff.reflectedRay(ray, refRay); // compute the ray differentaitl
+		//			GatherInfo refg = traceGatherRay(state, refRay, hp);
+		//			if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
+		//			{
+		//				if(vol->transmittance(state, refRay, vcol)) 
+		//				{
+		//					refg.constantRandiance *= vcol;
+		//					refg.photonFlux *= vcol;
+		//				}
+		//			}
+		//			gInfo.constantRandiance += refg.constantRandiance * colorA_t(rcol[0]);
+		//			gInfo.photonFlux += refg.photonFlux * colorA_t(rcol[0]);
+		//			gInfo.photonCount += refg.photonCount;
+		//		}
+		//		if(refract)
+		//		{
+		//			diffRay_t refRay(sp.P, dir[1], MIN_RAYDIST);
+		//			spDiff.refractedRay(ray, refRay, material->getMatIOR());
+		//			GatherInfo refg = traceGatherRay(state, refRay, hp);
+		//			if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
+		//			{
+		//				if(vol->transmittance(state, refRay, vcol)) 
+		//				{
+		//					refg.constantRandiance *= vcol;
+		//					refg.photonFlux *= vcol;
+		//				}
+		//			}
+		//			gInfo.constantRandiance += refg.constantRandiance * colorA_t(rcol[1]);
+		//			gInfo.photonFlux += refg.photonFlux * colorA_t(rcol[1]);
+		//			gInfo.photonCount += refg.photonCount;
+		//			alpha = refg.constantRandiance.A;
+		//		}
+		//	}			
+		//}
+		//--state.raylevel;
+		
+		//CFLOAT m_alpha = material->getAlpha(state, sp, wo);
+		//alpha = m_alpha + (1.f-m_alpha)*alpha;
+	}
+
+	else //nothing hit, return background    fixed me for SPPM
+	{
+		if(background)
+		{
+			//gInfo.constantRandiance += (*background)(ray, state, false);  //this maybe wrong for sppm
+		}
+	}
+
+	state.userdata = o_udat;
+	state.includeLights = oldIncludeLights;
+
+	return;	
+}
+
+
+void SPPM::initializePPM(bool us_PM)
+{
+	const camera_t* camera = scene->getCamera();
+	hitPoints.reserve(camera->resX() * camera->resY()); // used for SPPM
+	bound_t bBox = scene->getSceneBound(); // Now using Scene Bound 
+
+	// initialize SPPM statistics
+	float initialRadius = ((bBox.longX() + bBox.longY() + bBox.longZ()) / 3.f) / ((camera->resX() + camera->resY()) / 2.0f) * 2.f ;
+
+	initialRadius = std::min(initialRadius, 1.f); //Fix the overflow bug
+
+	int size = camera->resX() * camera->resY();
+	for(int i = 0; i < size; i++)
+	{
+		HitPoint ts;
+
+		ts.accPhotonFlux  = colorA_t(0.f);
+		ts.accPhotonCount = 0;
+		if(!PM_IRE) ts.radius2 = (initialRadius * initialFactor) * (initialRadius * initialFactor);
+
+		ts.acclightsource = colorA_t(0.f);
+		ts.constanthits = 0;
+		ts.surfacehits = 0;
+
+		hitPoints.push_back(ts);
+	}
+}
+
 integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 {
 	//int shadowDepth=5; //may used when integrate Direct Light
@@ -817,9 +1090,10 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 
 	SPPM* ite = new SPPM(numPhotons, _passNum);
 	ite->rDepth = raydepth;
-	ite->nSearch = 10000;
+	ite->nSearch = 100;
 	ite->maxBounces = bounces;
-	ite->initialFactor = 1.f;
+	ite->initialFactor = times;
+	ite->PM_IRE = false;
 
 	return ite;
 }
