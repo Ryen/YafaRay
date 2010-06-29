@@ -1,4 +1,5 @@
 ﻿#include <integrators/SPPM.h>
+#include <yafraycore/scr_halton.h>
 #include <sstream>
 #include <cmath>
 #include <algorithm>
@@ -17,6 +18,17 @@ SPPM::SPPM(unsigned int dPhotons, int _passnum)
 	passNum = _passnum;
 	totalnPhotons = 0;
 	initialFactor = 1.f;
+
+	hal2.setBase(2);
+	hal3.setBase(3);
+	hal5.setBase(5);
+	hal7.setBase(7);
+
+	hal2.setStart(0);
+	hal3.setStart(0);
+	hal5.setStart(0);
+	hal7.setStart(0);
+
 }
 
 SPPM::~SPPM()
@@ -352,15 +364,20 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		state.chromatic = true;
 		state.wavelength = scrHalton(5, curr);
 		
-		s1 = RI_vdC(curr+offset);
-		s2 = scrHalton(2, curr+offset);
-		s3 = scrHalton(3, curr+offset);
-		s4 = scrHalton(4, curr+offset);
-
+		//s1 = RI_vdC(curr+offset);
+		//s2 = scrHalton(2, curr+offset);
+		//s3 = scrHalton(3, curr+offset);
+		//s4 = scrHalton(4, curr+offset);
+		
 		//s1 = ourRandom(); //(*(state.prng))(); 
 		//s2 = ourRandom(); //(*(state.prng))(); 
 		//s3 = ourRandom(); //(*(state.prng))(); 
 		//s4 = ourRandom(); //(*(state.prng))(); 
+		//Halton
+		s1 = hal2.getNext();
+		s2 = hal3.getNext();
+		s3 = hal5.getNext();
+		s4 = hal7.getNext();
 
 		sL = float(curr) * invDiffPhotons;
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
@@ -446,15 +463,15 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			if(nBounces == maxBounces)break;  
 
 			// scatter photon
-			int d5 = 3*nBounces + 5;
+			//int d5 = 3*nBounces + 5;
 
-			s5 = scrHalton(d5, curr);
-			s6 = scrHalton(d5+1, curr);
-			s7 = scrHalton(d5+2, curr);
+			//s5 = scrHalton(d5, curr);
+			//s6 = scrHalton(d5+1, curr);
+			//s7 = scrHalton(d5+2, curr);
 
-			//s5 = ourRandom();  //(*(state.prng))(); //
-			//s6 = ourRandom();  //(*(state.prng))(); //
-			//s7 = ourRandom();  //(*(state.prng))(); //
+			s5 = ourRandom();  //(*(state.prng))(); //
+			s6 = ourRandom();  //(*(state.prng))(); //
+			s7 = ourRandom();  //(*(state.prng))(); //
 			
 			pSample_t sample(s5, s6, s7, BSDF_ALL, pcol, transm);
 
@@ -1092,7 +1109,7 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	ite->rDepth = raydepth;
 	ite->nSearch = 100;
 	ite->maxBounces = bounces;
-	ite->initialFactor = times;
+	ite->initialFactor = 10.f;
 	ite->PM_IRE = false;
 
 	return ite;

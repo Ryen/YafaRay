@@ -90,6 +90,8 @@ class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
 	mutable colorA_t directColor; //not used now
 	bool PM_IRE; //use PM for initial radius estimate
 
+	Halton hal2,hal3,hal5,hal7;
+
 	unsigned int nRefined; // Debug info: Refined pixel per pass
 
 	std::vector<shared_statistics>hitPoints; // per-pixel refine data

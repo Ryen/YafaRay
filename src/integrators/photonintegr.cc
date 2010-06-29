@@ -911,7 +911,7 @@ colorA_t photonIntegrator_t::integrate(renderState_t &state, diffRay_t &ray) con
 				// contribution of light emitting surfaces
 				if(bsdfs & BSDF_EMIT) col += material->emit(state, sp, wo);
 				
-				if(bsdfs & BSDF_DIFFUSE) col += estimateDirect_PH(state, sp, lights, scene, wo, trShad, sDepth);
+				//if(bsdfs & BSDF_DIFFUSE) col += estimateDirect_PH(state, sp, lights, scene, wo, trShad, sDepth);
 				
 				if(bsdfs & BSDF_DIFFUSE) col += finalGathering(state, sp, wo);
 			}
