@@ -19,6 +19,7 @@ SPPM::SPPM(unsigned int dPhotons, int _passnum)
 	totalnPhotons = 0;
 	initialFactor = 1.f;
 
+	//initialize the halton variable
 	hal2.setBase(2);
 	hal3.setBase(3);
 	hal5.setBase(5);
