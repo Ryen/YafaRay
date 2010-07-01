@@ -29,7 +29,7 @@ target_link_libraries(DebugIntegrator yafaraycore)
 add_library(SkyIntegrator SHARED SkyIntegrator.cc)
 target_link_libraries(SkyIntegrator yafaraycore)
 
-add_library(SPPM SHARED SPPM.cpp common.cc)
+add_library(SPPM SHARED SPPM.cpp)
 target_link_libraries(SPPM yafaraycore)
 
 install (TARGETS directlight photonmap pathtrace bidirpath SPPM

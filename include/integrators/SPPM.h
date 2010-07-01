@@ -1,7 +1,6 @@
 #ifndef Y_SPPM_H
 #define Y_SPPM_H
 
-#include <vector>
 #include <yafray_config.h>
 #include <core_api/environment.h>
 #include <core_api/material.h>
@@ -9,15 +8,15 @@
 #include <core_api/light.h>
 #include <core_api/imagefilm.h>
 #include <core_api/camera.h>
-#include <yafraycore/tiledintegrator.h>
+#include <core_api/mcintegrator.h>
 #include <yafraycore/photon.h>
 #include <yafraycore/monitor.h>
 #include <yafraycore/ccthreads.h>
 #include <yafraycore/timer.h>
 #include <yafraycore/spectrum.h>
 #include <utilities/sample_utils.h>
-#include <integrators/integr_utils.h>
-
+#include <utilities/mcqmc.h>
+#include <yafraycore/scr_halton.h>
 
 __BEGIN_YAFRAY
 
@@ -51,7 +50,7 @@ typedef struct GInfo
 }GatherInfo;
 
 
-class YAFRAYPLUGIN_EXPORT SPPM: public tiledIntegrator_t
+class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 {
 	public:
 	SPPM(unsigned int dPhotons, int passnum);
