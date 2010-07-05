@@ -1,4 +1,8 @@
-﻿#include <integrators/SPPM.h>
+﻿//Quesions: 1. The Material's emit method seems called twice?
+//			       2. The direct photons are not deposited now, and its strategy need double check.
+//                3. The reseed strategy need more tests.
+
+#include <integrators/sppm.h>
 #include <yafraycore/scr_halton.h>
 #include <sstream>
 #include <cmath>
@@ -19,16 +23,14 @@ SPPM::SPPM(unsigned int dPhotons, int _passnum)
 	totalnPhotons = 0;
 	initialFactor = 1.f;
 
+	sDepth = 5;
+	trShad = false;
+
 	//initialize the halton variable
 	hal2.setBase(2);
 	hal3.setBase(3);
 	hal5.setBase(5);
 	hal7.setBase(7);
-
-	hal2.setStart(0);
-	hal3.setStart(0);
-	hal5.setStart(0);
-	hal7.setStart(0);
 
 }
 
@@ -44,25 +46,11 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	std::stringstream passString;
 	imageFilm = image;
 
-	//scene->getAAParameters(AA_samples, AA_passes, AA_inc_samples, AA_threshold);
-	//iAA_passes = 1.f / (float) AA_passes;
-	//Y_INFO << integratorName << ": Rendering " << AA_passes << " passes" << std::endl;
-	//Y_INFO << integratorName << ": Min. " << AA_samples << " samples" << std::endl;
-	//Y_INFO << integratorName << ": "<< AA_inc_samples << " per additional pass" << std::endl;
-	//Y_INFO << integratorName << ": Max. " << AA_samples + std::max(0,AA_passes-1) * AA_inc_samples << " total samples" << std::endl;
-	//passString << "Rendering pass 1 of " << std::max(1, AA_passes) << "...";
-	//Y_INFO << integratorName << ": " << passString.str() << std::endl;
-
-	//passString << "Render Start!!!" <<std::endl;
-
-	//if(intpb) intpb->setTag("Render Start!!!"); 
-
 	gTimer.addEvent("rendert");
 	gTimer.start("rendert");
 	imageFilm->init(passNum); // need to doule-check how it effect sppm.
 	
 	const camera_t* camera = scene->getCamera();
-	//hitPoints.reserve(camera->resX() * camera->resY()); // used for SPPM
 
 	maxDepth = 0.f;
 	minDepth = 1e38f;
@@ -104,7 +92,6 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 		PM_IRE = false;
 	}
 
-
 	int size = camera->resX() * camera->resY();
 	for(int i=0; i<passNum; ++i) // progress pass
 	{
@@ -112,13 +99,12 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 		//imageFilm->setAAThreshold(AA_threshold);
 		imageFilm->nextPass(false, integratorName);
 		nRefined = 0;
-		renderPass(1, 1 + (i-1)*1, false); // offset seems only used for sampling?
+		renderPass(1, 1 + (i-1)*1, false); // offset are only related to the passNum, since we alway have only one sample.
 		std::cout<<  "This pass refined "<<nRefined<<" of "<<size<<" pixels."<<"\n";
 	}
 	maxDepth = 0.f;
 	gTimer.stop("rendert");
 	Y_INFO << integratorName << ": Overall rendertime: "<< gTimer.getTime("rendert")<<"s\n";
-
 	return true;
 }
 
@@ -238,7 +224,7 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				}
 
 				//radiance estimate
-				colorA_t color = hp.accPhotonFlux / (/* hp.radius2 * M_PI * */totalnPhotons) + gInfo.constantRandiance;
+				colorA_t color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons) + gInfo.constantRandiance;
 				
 				color.A = gInfo.constantRandiance.A; // This line may not needed.
 
@@ -259,6 +245,8 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 	return true;
 }
 
+
+
 //photon pass, scatter photon 
 void SPPM::prePass(int samples, int offset, bool adaptive)
 {
@@ -268,30 +256,19 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 
 	Y_INFO << integratorName << ": Starting Photon tracing pass...\n";
 
-	//if(trShad)
-	//{
-	//	set << "ShadowDepth [" << sDepth << "]";
-	//}
-	//if(!set.str().empty()) set << "+";
-	//set << "RayDepth [" << rDepth << "]";
+	if(trShad)
+	{
+		set << "ShadowDepth [" << sDepth << "]";
+	}
+	if(!set.str().empty()) set << "+";
+	set << "RayDepth [" << rDepth << "]";
 
 	diffuseMap.clear();
 	background = scene->getBackground();
 	lights = scene->lights;
 	std::vector<light_t*> tmplights;
 
-	//if(background)
-	//{
-	//	light_t *bgl = background->getLight();
-	//	if(bgl)
-	//	{
-	//		lights.push_back(bgl);
-	//		hasBGLight = true;
-	//		if(!set.str().empty()) set << "+";
-	//		set << "IBL";
-	//	}
-	//}
-	
+	//background do not emit photons, or it is merged into normal light?	
 	settings = set.str();
 	
 	ray_t ray;
@@ -332,7 +309,13 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	bool done=false;
 	unsigned int curr=0;
 
-	
+	//reseed the halton sequence
+	int pass_offset = totalnPhotons + offset * 4571; 
+	hal2.setStart(pass_offset + 123);
+	hal3.setStart(pass_offset + 127);
+	hal5.setStart(pass_offset + 117);
+	hal7.setStart(pass_offset + 119);
+
 	surfacePoint_t sp;
 	random_t prng(offset*(4517)+123);
 	renderState_t state(&prng);
@@ -374,6 +357,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		//s2 = ourRandom(); //(*(state.prng))(); 
 		//s3 = ourRandom(); //(*(state.prng))(); 
 		//s4 = ourRandom(); //(*(state.prng))(); 
+
 		//Halton
 		s1 = hal2.getNext();
 		s2 = hal3.getNext();
@@ -423,24 +407,26 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			material = sp.material;
 			material->initBSDF(state, sp, bsdfs);
 		
-
-			//deposit diffuse photon on surface
-			if( (!causticPhoton) && (bsdfs & (BSDF_DIFFUSE)))
-			{		
-				photon_t np(wi, sp.P, pcol);// pcol used here
-				np.shadeN = sp.Ng;
-				diffuseMap.pushPhoton(np);
-				diffuseMap.setNumPaths(curr); 
-				ndPhotonStored++;
-			}
-			//deposit caustic photon on surface       This count method seems not work properly. Need to double-check
-			else if(causticPhoton && (bsdfs & (BSDF_DIFFUSE | BSDF_GLOSSY)))
+			if(!directPhoton)
 			{
-				photon_t np(wi, sp.P, pcol);// pcol used here
-				np.shadeN = sp.Ng;
-				diffuseMap.pushPhoton(np);
-				diffuseMap.setNumPaths(curr); 
-				ncPhotonStored++;
+				//deposit diffuse photon on surface
+				if( (!causticPhoton) && (bsdfs & (BSDF_DIFFUSE)))
+				{		
+					photon_t np(wi, sp.P, pcol);// pcol used here
+					np.shadeN = sp.Ng;
+					diffuseMap.pushPhoton(np);
+					diffuseMap.setNumPaths(curr); 
+					ndPhotonStored++;
+				}
+				//deposit caustic photon on surface       This count method seems not work properly. Need to double-check
+				else if(causticPhoton && (bsdfs & (BSDF_DIFFUSE | BSDF_GLOSSY)))
+				{
+					photon_t np(wi, sp.P, pcol);// pcol used here
+					np.shadeN = sp.Ng;
+					diffuseMap.pushPhoton(np);
+					diffuseMap.setNumPaths(curr); 
+					ncPhotonStored++;
+				}
 			}
 			//if(bsdfs & (BSDF_DIFFUSE | BSDF_GLOSSY))
 			//{
@@ -464,15 +450,23 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			if(nBounces == maxBounces)break;  
 
 			// scatter photon
-			//int d5 = 3*nBounces + 5;
+			int d5 = 3*nBounces + 5;
 
 			//s5 = scrHalton(d5, curr);
 			//s6 = scrHalton(d5+1, curr);
 			//s7 = scrHalton(d5+2, curr);
 
-			s5 = ourRandom();  //(*(state.prng))(); //
-			s6 = ourRandom();  //(*(state.prng))(); //
-			s7 = ourRandom();  //(*(state.prng))(); //
+			hal8.setBase(d5);
+			hal9.setBase(d5+1);
+			hal10.setBase(d5+2);
+
+			hal8.setStart(pass_offset + curr);
+			hal9.setStart(pass_offset + curr);
+			hal10.setStart(pass_offset + curr);
+
+			s5 =  hal8.getNext();     //ourRandom();  //(*(state.prng))(); //
+			s6 =  hal9.getNext();     //ourRandom();  //(*(state.prng))(); //
+			s7 =  hal10.getNext();   //ourRandom();  //(*(state.prng))(); //
 			
 			pSample_t sample(s5, s6, s7, BSDF_ALL, pcol, transm);
 
@@ -578,18 +572,12 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
 
-        // remove FG here
-		//if(bsdfs & BSDF_DIFFUSE) directColor += estimateDirect_PH(state, sp, lights, scene, wo, false, sDepth);
-
-		if(0)
+		if(bsdfs & BSDF_DIFFUSE)
 		{
-				vector3d_t N = FACE_FORWARD(sp.Ng, sp.N, wo);
-				const photon_t *nearest = diffuseMap.findNearest(sp.P, N, 1.0f);
-				if(nearest) col += nearest->color();
+			gInfo.constantRandiance += estimateAllDirectLight(state, sp, wo);
 		}
-		else
-		{
 
+		
 		PFLOAT radius = hp.radius2;    //actually the square radius... used for SPPM
 
 		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t)); //need to be removed
@@ -597,7 +585,6 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		
 		if(diffuseMap.nPhotons() > 0) nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius); //the photon gatherd function, need to be changed
 
-		
 		if(nGathered > 0)
 		{
 			if(nGathered > _nMax)
@@ -606,7 +593,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				std::cout << "maximum Photons: "<<_nMax<<", radius: "<<radius<<"\n";
 				if(_nMax == 10) for(int j=0; j < nGathered; ++j ) std::cout<<"col:"<<gathered[j].photon->color()<<"\n";
 			}
-			float scale = 1.f / (radius * M_PI); // scale for energy normolize
+			float scale = 1.f ;// (radius * M_PI); // scale for energy normolize
 			for(int i=0; i<nGathered; ++i)
 			{
 				if( 1 || vector3d_t( gathered[i].photon->shadeN).normalize() * sp.Ng.normalize() > 0.5f ) // using copy constructor to removing the const effect 
@@ -621,7 +608,6 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		
 		// add caustics need to be changed for sppm
 		//merged into diffuseMap
-		}
 
 		state.raylevel++;
 		if(state.raylevel <= rDepth)
@@ -630,7 +616,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			if( (bsdfs & BSDF_DISPERSIVE) && state.chromatic )
 			{
 				state.includeLights = true; //debatable...
-				int dsam = 1;
+				int dsam = 1;  // Must trace one sample per pass or the progressive process will not work properly. Need double-check
 				int oldDivision = state.rayDivision;
 				int oldOffset = state.rayOffset;
 				float old_dc1 = state.dc1, old_dc2 = state.dc2;
@@ -683,11 +669,11 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				state.dc1 = old_dc1; state.dc2 = old_dc2;
 			}
 			
-			// glossy reflection with recursive raytracing:
+			// glossy reflection with recursive raytracing:  Pure GLOSSY material doesn't hold photons?
 			if( bsdfs & (BSDF_GLOSSY))
 			{
 				state.includeLights = false;
-				int gsam = 8;
+				int gsam = 1; // Must trace one sample per pass or the progressive process will not work properly. Need double-check
 				int oldDivision = state.rayDivision;
 				int oldOffset = state.rayOffset;
 				float old_dc1 = state.dc1, old_dc2 = state.dc2;
@@ -812,8 +798,6 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 }
 
 
-
-
 void SPPM::traceIRERay(yafaray::renderState_t &state, yafaray::diffRay_t &ray, yafaray::HitPoint &hp)
 {
 	static int _nMax=0;
@@ -845,7 +829,6 @@ void SPPM::traceIRERay(yafaray::renderState_t &state, yafaray::diffRay_t &ray, y
 		vector3d_t wo = -ray.dir;
 		const material_t *material = sp.material;
 		material->initBSDF(state, sp, bsdfs);
-		constantColor += material->emit(state, sp, wo);
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
 
@@ -1092,13 +1075,16 @@ void SPPM::initializePPM(bool us_PM)
 
 integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 {
-	//int shadowDepth=5; //may used when integrate Direct Light
+	bool transpShad=false;
+	int shadowDepth=5; //may used when integrate Direct Light
 	int raydepth=5;
 	int _passNum = 1000;
-	int numPhotons = 200000;
+	int numPhotons = 500000;
 	int bounces = 5;
 	float times = 1.f;
 
+	params.getParam("transpShad", transpShad);
+	params.getParam("shadowDepth", shadowDepth);
 	params.getParam("raydepth", raydepth);
 	params.getParam("photons", numPhotons);
 	params.getParam("passNums", _passNum);
@@ -1106,6 +1092,8 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	params.getParam("times", times); // initial radius times
 
 	SPPM* ite = new SPPM(numPhotons, _passNum);
+	ite->sDepth = shadowDepth;
+	ite->trShad = transpShad;
 	ite->rDepth = raydepth;
 	ite->nSearch = 100;
 	ite->maxBounces = bounces;

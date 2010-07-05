@@ -71,26 +71,17 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 
 	protected:
 	photonMap_t diffuseMap,causticMap; // photonmap
-	std::vector<light_t*> lights;
-	background_t *background;
-	bool hasBGLight;
 	std::string settings;
 	pdf1D_t *lightPowerD;
 	unsigned int nPhotons; //photon number to scatter
-	int sDepth, rDepth, maxBounces, nSearch, nCausSearch;// now used to do inital radius estimate
+	int nSearch;// now used to do inital radius estimate
 	int passNum; // the progressive pass number
-	float curRadius2; // the refine square radius for each pixel during each pass
 	float initialFactor; // used to time the initial radius
 	unsigned int totalnPhotons; // amount used to normalize photon energy
 	//unsigned int totalnCausPhotons;
-	mutable unsigned int  curPhotons; // the accumulate amout for each pixel during each pass
-	//mutable bool Isconstantcolor;
-	mutable colorA_t constantColor; // used to collect light source's & emiting material's radiance
-	mutable colorA_t directColor; //not used now
 	bool PM_IRE; //use PM for initial radius estimate
 
-	Halton hal2,hal3,hal5,hal7;
-
+	Halton hal2,hal3,hal5,hal7, hal8,hal9,hal10;
 	unsigned int nRefined; // Debug info: Refined pixel per pass
 
 	std::vector<shared_statistics>hitPoints; // per-pixel refine data
