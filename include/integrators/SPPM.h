@@ -81,7 +81,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	//unsigned int totalnCausPhotons;
 	bool PM_IRE; //use PM for initial radius estimate
 
-	Halton hal2,hal3,hal5,hal7, hal8,hal9,hal10;
+	Halton hal2,hal3,hal4,hal7, hal8,hal9,hal10;
 	unsigned int nRefined; // Debug info: Refined pixel per pass
 
 	std::vector<shared_statistics>hitPoints; // per-pixel refine data

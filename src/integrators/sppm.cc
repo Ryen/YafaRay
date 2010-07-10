@@ -27,10 +27,10 @@ SPPM::SPPM(unsigned int dPhotons, int _passnum)
 	trShad = false;
 
 	//initialize the halton variable
-	hal2.setBase(2);
-	hal3.setBase(3);
-	hal5.setBase(5);
-	hal7.setBase(7);
+	//hal2.setBase(2);
+	//hal3.setBase(3);
+	//hal5.setBase(5);
+	//hal7.setBase(7);
 
 }
 
@@ -310,11 +310,17 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	unsigned int curr=0;
 
 	//reseed the halton sequence
-	int pass_offset = totalnPhotons + offset * 4571; 
-	hal2.setStart(pass_offset + 123);
-	hal3.setStart(pass_offset + 127);
-	hal5.setStart(pass_offset + 117);
-	hal7.setStart(pass_offset + 119);
+	//int pass_offset = offset * 7; 
+	if(offset+3 < 50)
+	{    
+	hal2.setBase(prims[1+offset]);
+	hal3.setBase(prims[2+offset]);
+	hal4.setBase(prims[3+offset]);
+	}
+
+    hal2.setStart(offset);
+    hal3.setStart(offset);
+    hal4.setStart(offset);
 
 	surfacePoint_t sp;
 	random_t prng(offset*(4517)+123);
@@ -359,11 +365,19 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		//s4 = ourRandom(); //(*(state.prng))(); 
 
 		//Halton
-		s1 = hal2.getNext();
-		s2 = hal3.getNext();
-		s3 = hal5.getNext();
-		s4 = hal7.getNext();
-
+       s1 = RI_vdC(curr);
+       if(offset+3 < 50)
+       {
+               s2 = hal2.getNext();
+               s3 = hal3.getNext();
+               s4 = hal4.getNext();
+       }
+       else
+       {
+               s2 = ourRandom();
+               s3 = ourRandom();
+               s4 = ourRandom();
+       }
 		sL = float(curr) * invDiffPhotons;
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
 		if(lightNum >= numDLights){ Y_ERROR << integratorName << ": lightPDF sample error! "<<sL<<"/"<<lightNum<<"... stopping now.\n"; delete lightPowerD; return; }
@@ -407,7 +421,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			material = sp.material;
 			material->initBSDF(state, sp, bsdfs);
 		
-			if(!directPhoton)
+			if(1 || !directPhoton)
 			{
 				//deposit diffuse photon on surface
 				if( (!causticPhoton) && (bsdfs & (BSDF_DIFFUSE)))
@@ -452,21 +466,21 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			// scatter photon
 			int d5 = 3*nBounces + 5;
 
-			//s5 = scrHalton(d5, curr);
-			//s6 = scrHalton(d5+1, curr);
-			//s7 = scrHalton(d5+2, curr);
+			s5 = scrHalton(d5, curr);
+			s6 = scrHalton(d5+1, curr);
+			s7 = scrHalton(d5+2, curr);
 
-			hal8.setBase(d5);
-			hal9.setBase(d5+1);
-			hal10.setBase(d5+2);
+			//hal8.setBase(d5);
+			//hal9.setBase(d5+1);
+			//hal10.setBase(d5+2);
 
-			hal8.setStart(pass_offset + curr);
-			hal9.setStart(pass_offset + curr);
-			hal10.setStart(pass_offset + curr);
+			//hal8.setStart(pass_offset + curr);
+			//hal9.setStart(pass_offset + curr);
+			//hal10.setStart(pass_offset + curr);
 
-			s5 =  hal8.getNext();     //ourRandom();  //(*(state.prng))(); //
-			s6 =  hal9.getNext();     //ourRandom();  //(*(state.prng))(); //
-			s7 =  hal10.getNext();   //ourRandom();  //(*(state.prng))(); //
+			//s5 =  hal8.getNext();     //ourRandom();  //(*(state.prng))(); //
+			//s6 =  hal9.getNext();     //ourRandom();  //(*(state.prng))(); //
+			//s7 =  hal10.getNext();   //ourRandom();  //(*(state.prng))(); //
 			
 			pSample_t sample(s5, s6, s7, BSDF_ALL, pcol, transm);
 
@@ -572,10 +586,10 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
 
-		if(bsdfs & BSDF_DIFFUSE)
-		{
-			gInfo.constantRandiance += estimateAllDirectLight(state, sp, wo);
-		}
+		//if(bsdfs & BSDF_DIFFUSE)
+		//{
+		//	gInfo.constantRandiance += estimateAllDirectLight(state, sp, wo);
+		//}
 
 		
 		PFLOAT radius = hp.radius2;    //actually the square radius... used for SPPM
@@ -1097,7 +1111,7 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	ite->rDepth = raydepth;
 	ite->nSearch = 100;
 	ite->maxBounces = bounces;
-	ite->initialFactor = 5.f;
+	ite->initialFactor = 1.f;
 	ite->PM_IRE = false;
 
 	return ite;
