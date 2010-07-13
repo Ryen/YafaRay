@@ -17,7 +17,7 @@
 #include <utilities/sample_utils.h>
 #include <utilities/mcqmc.h>
 #include <yafraycore/scr_halton.h>
-
+#include "hashgrid.h"
 __BEGIN_YAFRAY
 
 typedef struct shared_statistics // per-pixel amount
@@ -70,6 +70,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	void traceIRERay(renderState_t &state, diffRay_t &ray, HitPoint &hp); //based on integrate method
 
 	protected:
+	HashGrid  photonGrid;
 	photonMap_t diffuseMap,causticMap; // photonmap
 	std::string settings;
 	pdf1D_t *lightPowerD;
@@ -80,6 +81,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	unsigned int totalnPhotons; // amount used to normalize photon energy
 	//unsigned int totalnCausPhotons;
 	bool PM_IRE; //use PM for initial radius estimate
+	bool bHashgrid; // flag to choose using hashgrid or not.
 
 	Halton hal2,hal3,hal4,hal7, hal8,hal9,hal10;
 	unsigned int nRefined; // Debug info: Refined pixel per pass

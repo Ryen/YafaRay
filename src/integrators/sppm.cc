@@ -25,6 +25,7 @@ SPPM::SPPM(unsigned int dPhotons, int _passnum)
 
 	sDepth = 5;
 	trShad = false;
+	bHashgrid = false;
 
 	//initialize the halton variable
 	//hal2.setBase(2);
@@ -263,7 +264,10 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	if(!set.str().empty()) set << "+";
 	set << "RayDepth [" << rDepth << "]";
 
-	diffuseMap.clear();
+	if(bHashgrid) photonGrid.clear();
+	else diffuseMap.clear();
+
+
 	background = scene->getBackground();
 	lights = scene->lights;
 	std::vector<light_t*> tmplights;
@@ -297,7 +301,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	Y_INFO << integratorName << ": Light(s) photon color testing for photon map:\n";
 	for(int i=0;i<numDLights;++i)
 	{
-		pcol = tmplights[i]->emitPhoton(.5, .5, .5, .5, ray, lightPdf);
+		pcol = tmplights[i]->emitPhoton(.5, .5, .5, .5, ray, lightPdf); // fix me. strange error
 		lightNumPdf = lightPowerD->func[i] * lightPowerD->invIntegral;
 		pcol *= fNumLights*lightPdf/lightNumPdf; //remember that lightPdf is the inverse of the pdf, hence *=...
 		Y_INFO << integratorName << ": Light ["<<i+1<<"] Photon col:"<<pcol<<" | lnpdf: "<<lightNumPdf<<"\n";
@@ -421,15 +425,21 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			material = sp.material;
 			material->initBSDF(state, sp, bsdfs);
 		
-			if(1 || !directPhoton)
+			if(1 || !directPhoton) // deposit all the photons 
 			{
 				//deposit diffuse photon on surface
 				if( (!causticPhoton) && (bsdfs & (BSDF_DIFFUSE)))
 				{		
 					photon_t np(wi, sp.P, pcol);// pcol used here
 					np.shadeN = sp.Ng;
+
+					if(bHashgrid) photonGrid.pushPhoton(np);
+					else
+					{
 					diffuseMap.pushPhoton(np);
 					diffuseMap.setNumPaths(curr); 
+					}
+
 					ndPhotonStored++;
 				}
 				//deposit caustic photon on surface       This count method seems not work properly. Need to double-check
@@ -437,8 +447,14 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 				{
 					photon_t np(wi, sp.P, pcol);// pcol used here
 					np.shadeN = sp.Ng;
-					diffuseMap.pushPhoton(np);
-					diffuseMap.setNumPaths(curr); 
+
+					if(bHashgrid) photonGrid.pushPhoton(np);
+					else
+					{
+						diffuseMap.pushPhoton(np);
+						diffuseMap.setNumPaths(curr); 
+					}
+
 					ncPhotonStored++;
 				}
 			}
@@ -521,16 +537,26 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	Y_INFO << integratorName << ": Stored diffuse photons: " << ndPhotonStored << yendl;
 	delete lightPowerD;
 
-	totalnPhotons +=  diffuseMap.nPaths();//nPhotons; // used for SPPM
+	totalnPhotons +=  nPhotons;//diffuseMap.nPaths(); // used for SPPM
 
 	Y_INFO << integratorName << ": Stored photons: "<<diffuseMap.nPhotons()<<"\n";
 	
-	if(diffuseMap.nPhotons() > 0) //
+	if(bHashgrid)
 	{
-		Y_INFO << integratorName << ": Building photons kd-tree:\n";
-		pb->setTag("Building photons kd-tree...");
-		diffuseMap.updateTree();
+		Y_INFO << integratorName << ": Building photons hashgrid:\n";
+		pb->setTag("Building photons hashgrid...");
+		photonGrid.updateGrid();
 		Y_INFO << integratorName << ": Done.\n";
+	}
+	else
+	{
+		if(diffuseMap.nPhotons() > 0) //
+		{
+			Y_INFO << integratorName << ": Building photons kd-tree:\n";
+			pb->setTag("Building photons kd-tree...");
+			diffuseMap.updateTree();
+			Y_INFO << integratorName << ": Done.\n";
+		}
 	}
 
 	if(diffuseMap.nPhotons() < 50) { Y_ERROR << integratorName << ": Too few photons, stopping now.\n"; return; }
@@ -539,7 +565,10 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	if(!intpb) delete pb;
 	
 	gTimer.stop("prePass");
-	Y_INFO << integratorName << ": Photonmap building time: " << gTimer.getTime("prePass") << "\n";
+	if(bHashgrid)
+		Y_INFO << integratorName << ": PhotonGrid building time: " << gTimer.getTime("prePass") << "\n";
+	else
+		Y_INFO << integratorName << ": PhotonMap building time: " << gTimer.getTime("prePass") << "\n";
 
 	return;
 }
@@ -597,7 +626,12 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t)); //need to be removed
 		int nGathered=0;
 		
-		if(diffuseMap.nPhotons() > 0) nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius); //the photon gatherd function, need to be changed
+		if(bHashgrid) nGathered = photonGrid.gather(sp.P, gathered, nMaxGather, radius);
+		else
+		{
+			if(diffuseMap.nPhotons() > 0) 
+				nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius); //the photon gatherd function, need to be changed
+		}
 
 		if(nGathered > 0)
 		{
@@ -1085,6 +1119,9 @@ void SPPM::initializePPM(bool us_PM)
 
 		hitPoints.push_back(ts);
 	}
+	
+	if(bHashgrid) photonGrid.setParm(initialRadius*2.f, nPhotons, bBox);
+
 }
 
 integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
@@ -1111,7 +1148,7 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	ite->rDepth = raydepth;
 	ite->nSearch = 100;
 	ite->maxBounces = bounces;
-	ite->initialFactor = 1.f;
+	ite->initialFactor = times;
 	ite->PM_IRE = false;
 
 	return ite;
