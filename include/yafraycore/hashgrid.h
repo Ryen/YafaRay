@@ -6,12 +6,12 @@
 
 __BEGIN_YAFRAY
 
-class HashGrid
+class YAFRAYCORE_EXPORT hashGrid_t
 {
 public:
-	HashGrid(){hashGrid = NULL;}
+	hashGrid_t(){hashGrid = NULL;}
 
-	HashGrid(double _cellSize, unsigned int _gridSize, bound_t _bBox);
+	hashGrid_t(double _cellSize, unsigned int _gridSize, bound_t _bBox);
 
 	void setParm(double _cellSize, unsigned int _gridSize, bound_t _bBox);
 

@@ -17,10 +17,10 @@
 #include <utilities/sample_utils.h>
 #include <utilities/mcqmc.h>
 #include <yafraycore/scr_halton.h>
-#include "hashgrid.h"
+#include <yafraycore/hashgrid.h>
 __BEGIN_YAFRAY
 
-typedef struct shared_statistics // per-pixel amount
+typedef struct _HitPoint // per-pixel amount
 {
 	float radius2; // square radius,
 	unsigned long long accPhotonCount;
@@ -32,15 +32,16 @@ typedef struct shared_statistics // per-pixel amount
 	unsigned int constanthits; // same as above
 }HitPoint;
 
-typedef struct GInfo
+//used for gather ray to collect photon information
+typedef struct _GatherInfo
 {
-	unsigned long photonCount;
-	colorA_t photonFlux;
-	colorA_t constantRandiance;
+	unsigned long photonCount;  // the number of photons that the gather ray collected
+	colorA_t photonFlux;   // the unnormalized flux of photons that the gather ray collected
+	colorA_t constantRandiance; // the radiance from when the gather ray hit the lightsource
 
-	GInfo(){photonCount = 0; photonFlux = colorA_t(0.f); constantRandiance = colorA_t(0.f);}
+	_GatherInfo(): photonCount(0), photonFlux(0.f),constantRandiance(0.f){}
 
-	GInfo & operator +=(const GInfo &g)
+	_GatherInfo & operator +=(const _GatherInfo &g)
 	{ 
 		photonCount += g.photonCount; 
 		photonFlux += g.photonFlux;
@@ -53,7 +54,7 @@ typedef struct GInfo
 class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 {
 	public:
-	SPPM(unsigned int dPhotons, int passnum);
+	SPPM(unsigned int dPhotons, int passnum, bool transpShad, int shadowDepth);
 	~SPPM();
 	virtual bool render(imageFilm_t *imageFilm);
 	/*! render a pass; only required by the default implementation of render() */
@@ -65,12 +66,17 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	virtual colorA_t integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const; // not used now
 	static integrator_t* factory(paraMap_t &params, renderEnvironment_t &render);
 
+	/*! initializing the things that PPM uses such as initial radius */
 	void initializePPM(bool us_PM);
-	GatherInfo traceGatherRay(renderState_t &state, diffRay_t &ray, HitPoint &hp); //based on integrate method to do the gatering trace, need double-check deadly.
-	void traceIRERay(renderState_t &state, diffRay_t &ray, HitPoint &hp); //based on integrate method
+
+	/*! based on integrate method to do the gatering trace, need double-check deadly. */
+	GatherInfo traceGatherRay(renderState_t &state, diffRay_t &ray, HitPoint &hp);
+
+	/*! use k-d tree's gather method to do a adaptive initial radius estimated, not enable now*/
+	void traceIRERay(renderState_t &state, diffRay_t &ray, HitPoint &hp); 
 
 	protected:
-	HashGrid  photonGrid;
+	hashGrid_t  photonGrid; // the hashgrid for holding photons
 	photonMap_t diffuseMap,causticMap; // photonmap
 	std::string settings;
 	pdf1D_t *lightPowerD;
@@ -78,16 +84,15 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	int nSearch;// now used to do inital radius estimate
 	int passNum; // the progressive pass number
 	float initialFactor; // used to time the initial radius
-	unsigned int totalnPhotons; // amount used to normalize photon energy
-	//unsigned int totalnCausPhotons;
-	bool PM_IRE; //use PM for initial radius estimate
+	unsigned int totalnPhotons; // amount of total photons that have been emited, used to normalize photon energy
+	bool PM_IRE; // flag to  say if using PM for initial radius estimate
 	bool bHashgrid; // flag to choose using hashgrid or not.
 
-	Halton hal2,hal3,hal4,hal7, hal8,hal9,hal10;
-	unsigned int nRefined; // Debug info: Refined pixel per pass
+	Halton hal2,hal3,hal4,hal7, hal8,hal9,hal10; // halton sequence to do 
 
-	std::vector<shared_statistics>hitPoints; // per-pixel refine data
+	std::vector<HitPoint>hitPoints; // per-pixel refine data
 
+    unsigned int nRefined; // Debug info: Refined pixel per pass
 };
 
 __END_YAFRAY

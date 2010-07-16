@@ -1,16 +1,14 @@
-// Now not integrated into the cmakefiles
-
-#include <integrators/hashgrid.h>
+#include <yafraycore/hashgrid.h>
 
 __BEGIN_YAFRAY
 
-HashGrid::HashGrid(double _cellSize, unsigned int _gridSize, yafaray::bound_t _bBox)
+hashGrid_t::hashGrid_t(double _cellSize, unsigned int _gridSize, yafaray::bound_t _bBox)
 :cellSize(_cellSize), gridSize(_gridSize), bBox(_bBox)
 {
 	invcellSize = 1. / cellSize;
 }
 
-void HashGrid::setParm(double _cellSize, unsigned int _gridSize, bound_t _bBox)
+void hashGrid_t::setParm(double _cellSize, unsigned int _gridSize, bound_t _bBox)
 {
 	cellSize = _cellSize;
 	invcellSize = 1. / cellSize;
@@ -18,18 +16,18 @@ void HashGrid::setParm(double _cellSize, unsigned int _gridSize, bound_t _bBox)
 	bBox = _bBox;
 }
 
-void HashGrid::clear()
+void hashGrid_t::clear()
 {
 	photons.clear();
 }
 
-void HashGrid::pushPhoton(photon_t &p)
+void hashGrid_t::pushPhoton(photon_t &p)
 {
 	photons.push_back(p);
 }
 
 
-void HashGrid::updateGrid()
+void hashGrid_t::updateGrid()
 {
 
 	if (!hashGrid)
@@ -77,7 +75,7 @@ void HashGrid::updateGrid()
 	std::cout<<"There are " << notused << " enties not used!"<<std::endl;
 }
 
-unsigned int HashGrid::gather(const point3d_t &P, foundPhoton_t *found, unsigned int K, PFLOAT sqRadius)
+unsigned int hashGrid_t::gather(const point3d_t &P, foundPhoton_t *found, unsigned int K, PFLOAT sqRadius)
 {
 	unsigned int count = 0;
 	PFLOAT radius = sqrt(sqRadius);
