@@ -88,7 +88,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	bool PM_IRE; // flag to  say if using PM for initial radius estimate
 	bool bHashgrid; // flag to choose using hashgrid or not.
 
-	Halton hal2,hal3,hal4,hal7, hal8,hal9,hal10; // halton sequence to do 
+	Halton hal1,hal2,hal3,hal4,hal7, hal8,hal9,hal10; // halton sequence to do 
 
 	std::vector<HitPoint>hitPoints; // per-pixel refine data
 
