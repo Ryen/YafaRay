@@ -60,16 +60,20 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 
 	initializePPM(PM_IRE); // seems could integrate into the preRender
 
+	passString << "Rendering pass "<< 1<<" of " << std::max(1, passNum) << "...";
+	if(intpb) intpb->setTag(passString.str().c_str());
 	renderPass(1, 0, false);
 	PM_IRE = false;
 
 	int hpNum = camera->resX() * camera->resY();
-
 	for(int i=0; i<passNum; ++i) //progress pass
 	{
 		if(scene->getSignals() & Y_SIG_ABORT) break;
 		imageFilm->nextPass(false, integratorName);
 		nRefined = 0;
+
+		passString << "Rendering pass "<< i+1<<" of " << std::max(1, passNum) << "...";
+		if(intpb) intpb->setTag(passString.str().c_str());
 		renderPass(1, 1 + (i-1)*1, false); // offset are only related to the passNum, since we alway have only one sample.
 		Y_INFO<<  integratorName <<": This pass refined "<<nRefined<<" of "<<hpNum<<" pixels."<<"\n";
 	}
