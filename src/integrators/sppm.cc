@@ -83,26 +83,6 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	return true;
 }
 
-bool SPPM::renderPass(int samples,int offset, bool adaptive)
-{
-	prePass(samples, offset, adaptive);
-
-	gTimer.addEvent("eyepass");
-	gTimer.start("eyepass");
-
-	Y_INFO << integratorName << ": Starting eye tracing pass"<<"\n";
-
-	renderArea_t a;
-	while(imageFilm->nextArea(a))
-	{
-		if(scene->getSignals() & Y_SIG_ABORT) break;
-		renderTile(a, samples, offset, adaptive,0);
-		imageFilm->finishArea(a);
-	}
-	gTimer.stop("eyepass");
-	Y_INFO << integratorName << ": eye-pass time: "<< gTimer.getTime("eyepass")<<"s\n";
-	return true;
-}
 
 bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive, int threadID)
 {
@@ -518,13 +498,12 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		//check how many
 		BSDF_t collections[4];
 		unsigned bcount = 0;
-		for(int i = 0; i < 4; i++)
-		{
-			if( bsdfs & BSDF_SPECULAR | BSDF_FILTER) collections[bcount++] = BSDF_SPECULAR | BSDF_FILTER;
-			if( bsdfs & BSDF_GLOSSY)	collections[bcount++] = BSDF_GLOSSY;
-			if( bsdfs & BSDF_DIFFUSE)	collections[bcount++] = BSDF_DIFFUSE;
-			if( bsdfs & BSDF_DISPERSIVE)	collections[bcount++] = BSDF_DISPERSIVE;
-		}
+
+		if( bsdfs & BSDF_SPECULAR | BSDF_FILTER) collections[bcount++] = BSDF_SPECULAR | BSDF_FILTER;
+		if( bsdfs & BSDF_GLOSSY)	collections[bcount++] = BSDF_GLOSSY;
+		if( bsdfs & BSDF_DIFFUSE)	collections[bcount++] = BSDF_DIFFUSE;
+		if( bsdfs & BSDF_DISPERSIVE)	collections[bcount++] = BSDF_DISPERSIVE;
+
 		
 		float p = ourRandom();
 

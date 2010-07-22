@@ -57,8 +57,6 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	SPPM(unsigned int dPhotons, int passnum, bool transpShad, int shadowDepth);
 	~SPPM();
 	virtual bool render(imageFilm_t *imageFilm);
-	/*! render a pass; only required by the default implementation of render() */
-	virtual bool renderPass(int samples, int offset, bool adaptive);
 	/*! render a tile; only required by default implementation of render() */
 	virtual bool renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive, int threadID);
 	virtual bool preprocess(); //not used for now
