@@ -8,7 +8,7 @@
 #include <algorithm>
 __BEGIN_YAFRAY
 
-const int nMaxGather = 10000; //used to gather all the photon in the radius. seems could get a better way to do that
+const int nMaxGather = 1000; //used to gather all the photon in the radius. seems could get a better way to do that
 SPPM::SPPM(unsigned int dPhotons, int _passnum, bool transpShad, int shadowDepth)
 {
 	type = SURFACE;
@@ -47,9 +47,13 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	std::stringstream passString;
 	imageFilm = image;
 
+	passString << "Rendering pass 1 of " << std::max(1, passNum) << "...";
+	Y_INFO << integratorName << ": " << passString.str() << yendl;
+	if(intpb) intpb->setTag(passString.str().c_str());
+
 	gTimer.addEvent("rendert");
 	gTimer.start("rendert");
-	imageFilm->init(passNum); // need to doule-check how it effect sppm.
+	imageFilm->init(passNum);
 	
 	const camera_t* camera = scene->getCamera();
 
@@ -60,8 +64,6 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 
 	initializePPM(PM_IRE); // seems could integrate into the preRender
 
-	passString << "Rendering pass "<< 1<<" of " << std::max(1, passNum) << "...";
-	if(intpb) intpb->setTag(passString.str().c_str());
 	renderPass(1, 0, false);
 	PM_IRE = false;
 
@@ -71,9 +73,6 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 		if(scene->getSignals() & Y_SIG_ABORT) break;
 		imageFilm->nextPass(false, integratorName);
 		nRefined = 0;
-
-		passString << "Rendering pass "<< i+1<<" of " << std::max(1, passNum) << "...";
-		if(intpb) intpb->setTag(passString.str().c_str());
 		renderPass(1, 1 + (i-1)*1, false); // offset are only related to the passNum, since we alway have only one sample.
 		Y_INFO<<  integratorName <<": This pass refined "<<nRefined<<" of "<<hpNum<<" pixels."<<"\n";
 	}
@@ -284,7 +283,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	
 	pb->init(128);
 	pbStep = std::max(1U, nPhotons/128);
-	pb->setTag("Building photon map...");
+	//pb->setTag("Building photon map...");
 
 	//Pregather  photons
 	float invDiffPhotons = 1.f / (float)nPhotons;
@@ -410,7 +409,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		done = (curr >= nPhotons);
 	}
 	pb->done();
-	pb->setTag("Photon map built.");
+	//pb->setTag("Photon map built.");
 	Y_INFO << integratorName << ":Photon map built.\n";
 	Y_INFO << integratorName << ": Shot "<<curr<<" photons from " << numDLights << " light(s)\n";
 	Y_INFO << integratorName << ": Stored photon vertexs: " << ndPhotonStored << yendl;
@@ -423,7 +422,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	if(bHashgrid)
 	{
 		Y_INFO << integratorName << ": Building photons hashgrid:\n";
-		pb->setTag("Building photons hashgrid...");
+		//pb->setTag("Building photons hashgrid...");
 		photonGrid.updateGrid();
 		Y_INFO << integratorName << ": Done.\n";
 	}
@@ -432,7 +431,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		if(diffuseMap.nPhotons() > 0) //
 		{
 			Y_INFO << integratorName << ": Building photons kd-tree:\n";
-			pb->setTag("Building photons kd-tree...");
+			//pb->setTag("Building photons kd-tree...");
 			diffuseMap.updateTree();
 			Y_INFO << integratorName << ": Done.\n";
 		}
@@ -492,32 +491,31 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
 		
-		// use russian roulette to only choose one bsdf to sample
-		BSDF_t  choosen_bsdf;
+		//// use russian roulette to only choose one bsdf to sample
+		//BSDF_t  choosen_bsdf;
 
-		//check how many
-		BSDF_t collections[4];
-		unsigned bcount = 0;
+		////check how many
+		//BSDF_t collections[4];
+		//unsigned bcount = 0;
 
-		if( bsdfs & BSDF_SPECULAR | BSDF_FILTER) collections[bcount++] = BSDF_SPECULAR | BSDF_FILTER;
-		if( bsdfs & BSDF_GLOSSY)	collections[bcount++] = BSDF_GLOSSY;
-		if( bsdfs & BSDF_DIFFUSE)	collections[bcount++] = BSDF_DIFFUSE;
-		if( bsdfs & BSDF_DISPERSIVE)	collections[bcount++] = BSDF_DISPERSIVE;
+		//if( bsdfs & BSDF_SPECULAR | BSDF_FILTER) collections[bcount++] = BSDF_SPECULAR | BSDF_FILTER;
+		//if( bsdfs & BSDF_GLOSSY)	collections[bcount++] = BSDF_GLOSSY;
+		//if( bsdfs & BSDF_DIFFUSE)	collections[bcount++] = BSDF_DIFFUSE;
+		//if( bsdfs & BSDF_DISPERSIVE)	collections[bcount++] = BSDF_DISPERSIVE;
+		//
+		//float p = ourRandom();
 
-		
-		float p = ourRandom();
-
-		for(int i = 0; i < bcount; i++)
-		{
-			if(p < (i+1)/ float(bcount))
-			{
-				choosen_bsdf = collections[i];
-				break;
-			}
-		}
-		bsdfs = (bsdfs & BSDF_VOLUMETRIC) ? BSDF_VOLUMETRIC : 0;
-		bsdfs |= choosen_bsdf;
-		
+		//for(int i = 0; i < bcount; i++)
+		//{
+		//	if(p < (i+1)/ float(bcount))
+		//	{
+		//		choosen_bsdf = collections[i];
+		//		break;
+		//	}
+		//}
+		//bsdfs = (bsdfs & BSDF_VOLUMETRIC) ? BSDF_VOLUMETRIC : 0;
+		//bsdfs |= choosen_bsdf;
+		//
 		
 		PFLOAT radius = hp.radius2;    //actually the square radius... used for SPPM
 
@@ -569,7 +567,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			if( (bsdfs & BSDF_DISPERSIVE) && state.chromatic )
 			{
 				state.includeLights = true; //debatable...
-				int dsam = 1;  // Must trace only one sample per pass or the progressive process will not work properly. Need double-check
+				int dsam = 8;  // seems not handle the same as glossy does. one BSDF_VOLUMETRIC is inside the loop, the other is outside
 				int oldDivision = state.rayDivision;
 				int oldOffset = state.rayOffset;
 				float old_dc1 = state.dc1, old_dc2 = state.dc2;
@@ -579,7 +577,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				float d_1 = 1.f/(float)dsam;
 				float ss1 = RI_S(state.pixelSample + state.samplingOffs);
 				color_t dcol(0.f), vcol(1.f);
-				GatherInfo cing;
+				GatherInfo cing, t_cing; //Dispersive is different handled, not same as GLOSSY, at the BSDF_VOLUMETRIC part
 				vector3d_t wi;
 				const volumeHandler_t* vol;
 				diffRay_t refRay;
@@ -600,11 +598,12 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 						wl2rgb(state.wavelength, wl_col);
 						state.chromatic = false;
 						refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
-						cing = traceGatherRay(state, refRay, hp);
-						cing.photonFlux *= mcol * wl_col;
-						cing.constantRandiance *= mcol * wl_col;
+						t_cing = traceGatherRay(state, refRay, hp);
+						t_cing.photonFlux *= mcol * wl_col;
+						t_cing.constantRandiance *= mcol * wl_col;
 						state.chromatic = true;
 					}
+					cing += t_cing;
 				}
 				if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
 				{
@@ -613,9 +612,9 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 					cing.constantRandiance *= vcol;
 				}
 
-				gInfo.constantRandiance += cing.constantRandiance;
-				gInfo.photonFlux += cing.photonFlux;
-				gInfo.photonCount += cing.photonCount;
+				gInfo.constantRandiance += cing.constantRandiance * d_1;
+				gInfo.photonFlux += cing.photonFlux * d_1;
+				gInfo.photonCount += cing.photonCount * d_1;
 
 				state.rayDivision = oldDivision;
 				state.rayOffset = oldOffset;
@@ -626,7 +625,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			if( bsdfs & (BSDF_GLOSSY))
 			{
 				state.includeLights = false;
-				int gsam = 1; // Must trace only one sample per pass or the progressive process will not work properly. Need double-check
+				int gsam = 8; 
 				int oldDivision = state.rayDivision;
 				int oldOffset = state.rayOffset;
 				float old_dc1 = state.dc1, old_dc2 = state.dc2;
@@ -636,7 +635,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				int offs = gsam * state.pixelSample + state.samplingOffs;
 				float d_1 = 1.f/(float)gsam;
 				color_t gcol(0.f), vcol(1.f);
-				GatherInfo ging;
+				GatherInfo ging, t_ging;
 				vector3d_t wi;
 				const volumeHandler_t* vol;
 				diffRay_t refRay;
@@ -659,19 +658,20 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 					{
 						mcol *= std::fabs(wi*sp.N)/s.pdf;
 						refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
-						ging += traceGatherRay(state, refRay, hp);
-						ging.photonFlux *=mcol;
-						ging.constantRandiance *= mcol;
+						t_ging = traceGatherRay(state, refRay, hp);
+						t_ging.photonFlux *=mcol;
+						t_ging.constantRandiance *= mcol;
 					}
 					
 					if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
 					{
 						if(vol->transmittance(state, refRay, vcol)) 
 						{
-							ging.photonFlux *= vcol;
-							ging.constantRandiance *= vcol;
+							t_ging.photonFlux *= vcol;
+							t_ging.constantRandiance *= vcol;
 						}
 					}
+					ging += t_ging;
 				}
 				gInfo.constantRandiance += ging.constantRandiance * d_1;
 				gInfo.photonFlux += ging.photonFlux * d_1;
