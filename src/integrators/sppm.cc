@@ -1,5 +1,5 @@
-﻿ //Quesions:  1.  The tracegatherRay method's russian roulette need double-check. (It seems not be theoretical right)
-//                  2. Need  a correct reseed strategy to make sppm more efficient.
+﻿ //Quesions:  1.  Now just want to use visual importance to speed the render
+//                  2.	 Need  a correct reseed strategy to make sppm more efficient.
 
 #include <integrators/sppm.h>
 #include <yafraycore/scr_halton.h>
@@ -36,7 +36,9 @@ SPPM::SPPM(unsigned int dPhotons, int _passnum, bool transpShad, int shadowDepth
 }
 
 SPPM::~SPPM()
-{}
+{
+
+}
 
 bool SPPM::preprocess()
 {
@@ -63,7 +65,6 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	if(scene->doDepth()) precalcDepths();
 
 	initializePPM(PM_IRE); // seems could integrate into the preRender
-
 	renderPass(1, 0, false);
 	PM_IRE = false;
 
@@ -120,8 +121,8 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				// the (1/n, Larcher&Pillichshammer-Seq.) only gives good coverage when total sample count is known
 				// hence we use scrambled (Sobol, van-der-Corput) for multipass AA
 
-				dx = RI_S(rstate.pixelSample, rstate.samplingOffs);
-				dy = RI_vdC(rstate.pixelSample, rstate.samplingOffs);
+				dx = RI_vdC(rstate.pixelSample, rstate.samplingOffs);
+				dy = RI_S(rstate.pixelSample, rstate.samplingOffs);
 
 				if(sampleLns)
 				{
@@ -157,7 +158,6 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 
 				// progressive refinement
 				const float _alpha = 0.7; // change to 0.8 to do a tests
-				float g = 1.0f;
 
 				// The author's refine formular
 				if(gInfo.photonCount > 0)
@@ -316,6 +316,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
        //        s3 = ourRandom();
        //        s4 = ourRandom();
        //}
+
 		sL = float(curr) * invDiffPhotons;
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
 		if(lightNum >= numDLights){ Y_ERROR << integratorName << ": lightPDF sample error! "<<sL<<"/"<<lightNum<<"... stopping now.\n"; delete lightPowerD; return; }
@@ -491,35 +492,10 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
 		
-		//// use russian roulette to only choose one bsdf to sample
-		//BSDF_t  choosen_bsdf;
-
-		////check how many
-		//BSDF_t collections[4];
-		//unsigned bcount = 0;
-
-		//if( bsdfs & BSDF_SPECULAR | BSDF_FILTER) collections[bcount++] = BSDF_SPECULAR | BSDF_FILTER;
-		//if( bsdfs & BSDF_GLOSSY)	collections[bcount++] = BSDF_GLOSSY;
-		//if( bsdfs & BSDF_DIFFUSE)	collections[bcount++] = BSDF_DIFFUSE;
-		//if( bsdfs & BSDF_DISPERSIVE)	collections[bcount++] = BSDF_DISPERSIVE;
-		//
-		//float p = ourRandom();
-
-		//for(int i = 0; i < bcount; i++)
-		//{
-		//	if(p < (i+1)/ float(bcount))
-		//	{
-		//		choosen_bsdf = collections[i];
-		//		break;
-		//	}
-		//}
-		//bsdfs = (bsdfs & BSDF_VOLUMETRIC) ? BSDF_VOLUMETRIC : 0;
-		//bsdfs |= choosen_bsdf;
-		//
 		
 		PFLOAT radius = hp.radius2;    //actually the square radius... used for SPPM
 
-		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t)); 
+		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t)); //may cause stack overflow, should heap later.
 
 		int nGathered=0;
 		
@@ -530,7 +506,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			{
 				if(PM_IRE)
 				{
-					radius = 1.0f;
+					radius = dsRadius * dsRadius;
 					nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius);
 					hp.radius2 = radius;
 				}
@@ -848,6 +824,7 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	int bounces = 5;
 	float times = 1.f;
 	int searchNum = 100;
+	float dsRad = 1.0f;
 
 	params.getParam("transpShad", transpShad);
 	params.getParam("shadowDepth", shadowDepth);
@@ -857,6 +834,7 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	params.getParam("bounces", bounces);
 	params.getParam("times", times); // initial radius times
 
+	params.getParam("photonRadius", dsRad);
 	params.getParam("searchNum", searchNum);
 	params.getParam("pmIRE", pmIRE);
 
@@ -865,7 +843,8 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 	ite->maxBounces = bounces;
 	ite->initialFactor = times;
 
-	ite->nSearch = searchNum; // under tests enable now
+	ite->dsRadius = dsRad; // under tests enable now
+	ite->nSearch = searchNum; 
 	ite->PM_IRE = pmIRE; 
 
 	return ite;

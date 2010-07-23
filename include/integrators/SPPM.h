@@ -79,7 +79,8 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	std::string settings;
 	pdf1D_t *lightPowerD;
 	unsigned int nPhotons; //photon number to scatter
-	int nSearch;// now used to do inital radius estimate
+	float dsRadius; // used to do initial radius estimate
+	int nSearch;// now used to do initial radius estimate
 	int passNum; // the progressive pass number
 	float initialFactor; // used to time the initial radius
 	unsigned int totalnPhotons; // amount of total photons that have been emited, used to normalize photon energy
