@@ -1,5 +1,6 @@
 ﻿ //Quesions:  1.  Now just want to use visual importance to speed the render
 //                  2.	 Need  a correct reseed strategy to make sppm more efficient.
+//					 3. Using heap instead stack to fix stackoverflow
 
 #include <integrators/sppm.h>
 #include <yafraycore/scr_halton.h>
@@ -297,6 +298,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		state.chromatic = true;
 		state.wavelength = scrHalton(5, curr);
 
+	   // Tried LD, get bad and strange results for some stategy.
        s1 = ourRandom();//hal1.getNext();
 	   s2 = ourRandom();//hal2.getNext();
        s3 = ourRandom();//hal3.getNext();
@@ -317,7 +319,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
        //        s4 = ourRandom();
        //}
 
-		sL = float(curr) * invDiffPhotons;
+		sL = float(curr) * invDiffPhotons; // Does sL also need more random for each pass?
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
 		if(lightNum >= numDLights){ Y_ERROR << integratorName << ": lightPDF sample error! "<<sL<<"/"<<lightNum<<"... stopping now.\n"; delete lightPowerD; return; }
 
@@ -360,9 +362,8 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			material = sp.material;
 			material->initBSDF(state, sp, bsdfs);
 		
-
-			//deposit photon on diffuse surface, now we only have one map for all
-			if(bsdfs & (BSDF_DIFFUSE))
+			//deposit photon on diffuse surface, now we only have one map for all, elimate directPhoton for we estimate it directly
+			if(!directPhoton && (bsdfs & (BSDF_DIFFUSE)))
 			{		
 				photon_t np(wi, sp.P, pcol);// pcol used here
 				np.shadeN = sp.Ng;
@@ -380,11 +381,9 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			if(nBounces == maxBounces)break;  
 
 			// scatter photon
-			int d5 = 3*nBounces + 5;
-
-			s5 = scrHalton(d5, curr);
-			s6 = scrHalton(d5+1, curr);
-			s7 = scrHalton(d5+2, curr);
+			s5 = ourRandom(); // now should use this to see correctness
+			s6 = ourRandom();
+			s7 = ourRandom();
 
 			pSample_t sample(s5, s6, s7, BSDF_ALL, pcol, transm);
 
@@ -453,7 +452,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	return;
 }
 
-//now its a dummy function
+//now it's a dummy function
 colorA_t SPPM::integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const
 {
 	return colorA_t(0.f);	
@@ -488,30 +487,38 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		vector3d_t wo = -ray.dir;
 		const material_t *material = sp.material;
 		material->initBSDF(state, sp, bsdfs);
-		gInfo.constantRandiance += material->emit(state, sp, wo);
+		gInfo.constantRandiance += material->emit(state, sp, wo); //add only once, but FG seems add twice?
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
-		
-		
-		PFLOAT radius = hp.radius2;    //actually the square radius... used for SPPM
 
+		if(bsdfs & BSDF_DIFFUSE)
+		{
+			gInfo.constantRandiance += estimateAllDirectLight(state, sp, wo);
+		}
+		
+		// estimate radiance using photon map
+		PFLOAT radius2 = hp.radius2;    //actually the square radius... used for SPPM
 		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t)); //may cause stack overflow, should heap later.
-
 		int nGathered=0;
 		
-		if(bHashgrid) nGathered = photonGrid.gather(sp.P, gathered, nMaxGather, radius);
+		if(bHashgrid) 
+			nGathered = photonGrid.gather(sp.P, gathered, nMaxGather, radius2); // alway diable now
 		else
 		{
 			if(diffuseMap.nPhotons() > 0)
 			{
-				if(PM_IRE)
+				if(PM_IRE && !hp.radiusSetted)
 				{
-					radius = dsRadius * dsRadius;
-					nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius);
-					hp.radius2 = radius;
+					radius2 = dsRadius * dsRadius; 
+					nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius2);  // adaptive choose the initial radius
+					if(nGathered > 0)
+					{
+						hp.radius2 = radius2;  //should set only once, or the normalize will be wrong.
+						hp.radiusSetted = true;
+					}
 				}
 				else
-					nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius); //we always collected all the photon inside the radius
+					nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius2); //we always collected all the photon inside the radius
 			}
 		}
 
@@ -520,7 +527,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			if(nGathered > _nMax)
 			{
 				_nMax = nGathered;
-				std::cout << "maximum Photons: "<<_nMax<<", radius: "<<radius<<"\n";
+				std::cout << "maximum Photons: "<<_nMax<<", radius2: "<<radius2<<"\n";
 				if(_nMax == 10) for(int j=0; j < nGathered; ++j ) std::cout<<"col:"<<gathered[j].photon->color()<<"\n";
 			}
 			//float scale = 1.f; // scale is useless now
@@ -667,13 +674,6 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				color_t rcol[2], vcol;
 				material->getSpecular(state, sp, wo, reflect, refract, dir, rcol);
 				const volumeHandler_t *vol;
-
-				//if(reflect && refract)
-				//{
-				//	float p = ourRandom(); // also russian roulette
-				//	if(p <= 0.5) refract = false;
-				//	else reflect = false;
-				//}
 			
 				if(reflect)
 				{
@@ -731,57 +731,8 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 
 	gInfo.constantRandiance.A = alpha; // a small trick for just hold the alpha value.
 
-	//gInfo.photonFlux *= 4;
-	//gInfo.constantRandiance *= 4;
-	//gInfo.photonCount *= 4;
 	return gInfo;
 }
-
-// Now not integrated
-void SPPM::traceIRERay(yafaray::renderState_t &state, yafaray::diffRay_t &ray, yafaray::HitPoint &hp)
-{
-	static int _nMax=0;
-	static int calls=0;
-	++calls;
-
-	CFLOAT alpha=0.0;
-	surfacePoint_t sp;
-
-	void *o_udat = state.userdata;
-	bool oldIncludeLights = state.includeLights;
-	if(scene->intersect(ray, sp))
-	{
-		unsigned char userdata[USER_DATA_SIZE+7];
-		state.userdata = (void *)( &userdata[7] - ( ((size_t)&userdata[7])&7 ) ); // pad userdata to 8 bytes
-		if(state.raylevel == 0)
-		{
-			state.chromatic = true;
-			state.includeLights = true;
-		}
-
-		BSDF_t bsdfs;
-		vector3d_t wo = -ray.dir;
-		const material_t *material = sp.material;
-		material->initBSDF(state, sp, bsdfs);
-		state.includeLights = false;
-		spDifferentials_t spDiff(sp, ray);
-
-		if(bsdfs & BSDF_DIFFUSE)
-		{
-			PFLOAT radius = 1.0f;   // need to be nsearch,
-			foundPhoton_t *gathered = (foundPhoton_t *)alloca(nSearch * sizeof(foundPhoton_t)); 
-			int nGathered=0;
-			
-			if(diffuseMap.nPhotons() > 0) nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius); 
-			hp.radius2 = radius;
-		}
-	}
-
-	state.userdata = o_udat;
-	state.includeLights = oldIncludeLights;
-	return;	
-}
-
 
 void SPPM::initializePPM(bool us_PM)
 {
@@ -801,10 +752,7 @@ void SPPM::initializePPM(bool us_PM)
 		hp.accPhotonFlux  = colorA_t(0.f);
 		hp.accPhotonCount = 0;
 		hp.radius2 = (initialRadius * initialFactor) * (initialRadius * initialFactor);
-
-		hp.acclightsource = colorA_t(0.f);
-		hp.constanthits = 0;
-		hp.surfacehits = 0;
+		hp.radiusSetted = false;
 
 		hitPoints.push_back(hp);
 	}

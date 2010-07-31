@@ -26,10 +26,7 @@ typedef struct _HitPoint // per-pixel amount
 	unsigned long long accPhotonCount;
 	colorA_t accPhotonFlux; // accumulated flux
 
-	//for constant_color usage
-	colorA_t acclightsource; // accumulated radiance from light source & emiting material
-	unsigned int surfacehits; //not used now
-	unsigned int constanthits; // same as above
+	bool radiusSetted; // used by IRE to direct whether the initial radius is set or not.
 }HitPoint;
 
 //used for gather ray to collect photon information
@@ -70,8 +67,6 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	/*! based on integrate method to do the gatering trace, need double-check deadly. */
 	GatherInfo traceGatherRay(renderState_t &state, diffRay_t &ray, HitPoint &hp);
 
-	/*! use k-d tree's gather method to do a adaptive initial radius estimated, not enable now*/
-	void traceIRERay(renderState_t &state, diffRay_t &ray, HitPoint &hp); 
 
 	protected:
 	hashGrid_t  photonGrid; // the hashgrid for holding photons
