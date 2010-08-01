@@ -65,6 +65,7 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 
 	if(scene->doDepth()) precalcDepths();
 
+	nDireCompt = 10; // only the first 10 pass need compute direct light. save some time for huge pass used in sppm
 	initializePPM(PM_IRE); // seems could integrate into the preRender
 	renderPass(1, 0, false);
 	PM_IRE = false;
@@ -151,11 +152,20 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				//for sppm progressive
 				int index = i*camera->resX() + j; 
 				HitPoint &hp = hitPoints[index];
+				if(offset == nDireCompt + 1) 
+				{
+					hp.consNeedUpdate = false;
+					hp.constantRandiance *= 1/float(nDireCompt);
+				}
 
 				GatherInfo gInfo = traceGatherRay(rstate, c_ray, hp);
 				gInfo.photonFlux *= scene->volIntegrator->transmittance(rstate, c_ray);
-				gInfo.constantRandiance *= scene->volIntegrator->transmittance(rstate, c_ray);
-				gInfo.constantRandiance += scene->volIntegrator->integrate(rstate, c_ray); // Now using it to simulate for volIntegrator not using PPM, need more tests
+				if(hp.consNeedUpdate)
+				{
+					gInfo.constantRandiance *= scene->volIntegrator->transmittance(rstate, c_ray);
+					gInfo.constantRandiance += scene->volIntegrator->integrate(rstate, c_ray); // Now using it to simulate for volIntegrator not using PPM, need more tests
+					hp.constantRandiance += gInfo.constantRandiance;
+				}
 
 				// progressive refinement
 				const float _alpha = 0.7; // change to 0.8 to do a tests
@@ -169,11 +179,19 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 					hp.accPhotonFlux = (hp.accPhotonFlux + gInfo.photonFlux) * g;
 					nRefined++;
 				}
-
 				//radiance estimate
-				colorA_t color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons) + gInfo.constantRandiance;
-				color.A = gInfo.constantRandiance.A; // maintain the alpha value, need more tests.
-
+				colorA_t color;
+				if(hp.consNeedUpdate)
+				{
+					color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons) + gInfo.constantRandiance;
+					color.A = gInfo.constantRandiance.A;
+				}
+				else
+				{
+					color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons) + hp.constantRandiance;
+					color.A = hp.constantRandiance.A;
+				}				
+				// maintain the alpha value, need more tests.
 				imageFilm->addSample(wt * color, j, i, dx, dy, &a);
 
 				if(do_depth)
@@ -487,11 +505,11 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		vector3d_t wo = -ray.dir;
 		const material_t *material = sp.material;
 		material->initBSDF(state, sp, bsdfs);
-		gInfo.constantRandiance += material->emit(state, sp, wo); //add only once, but FG seems add twice?
+		if(hp.consNeedUpdate) gInfo.constantRandiance += material->emit(state, sp, wo); //add only once, but FG seems add twice?
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
 
-		if(bsdfs & BSDF_DIFFUSE)
+		if( hp.consNeedUpdate && (bsdfs & BSDF_DIFFUSE))
 		{
 			gInfo.constantRandiance += estimateAllDirectLight(state, sp, wo);
 		}
@@ -720,7 +738,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 
 	else //nothing hit, return background
 	{
-		if(background)
+		if(background && hp.consNeedUpdate)
 		{
 			gInfo.constantRandiance += (*background)(ray, state, false); 
 		}
@@ -752,6 +770,8 @@ void SPPM::initializePPM(bool us_PM)
 		hp.accPhotonFlux  = colorA_t(0.f);
 		hp.accPhotonCount = 0;
 		hp.radius2 = (initialRadius * initialFactor) * (initialRadius * initialFactor);
+		hp.constantRandiance = colorA_t(0.f);
+		hp.consNeedUpdate = true;
 		hp.radiusSetted = false;
 
 		hitPoints.push_back(hp);

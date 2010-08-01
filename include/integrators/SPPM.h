@@ -25,7 +25,9 @@ typedef struct _HitPoint // per-pixel amount
 	float radius2; // square radius,
 	unsigned long long accPhotonCount;
 	colorA_t accPhotonFlux; // accumulated flux
+	colorA_t constantRandiance;
 
+	bool consNeedUpdate; // use to dertermine is constantRandiance need to estimate
 	bool radiusSetted; // used by IRE to direct whether the initial radius is set or not.
 }HitPoint;
 
@@ -81,6 +83,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	unsigned int totalnPhotons; // amount of total photons that have been emited, used to normalize photon energy
 	bool PM_IRE; // flag to  say if using PM for initial radius estimate
 	bool bHashgrid; // flag to choose using hashgrid or not.
+	int nDireCompt; // passNum to doing direct light estimate;
 
 	Halton hal1,hal2,hal3,hal4,hal7, hal8,hal9,hal10; // halton sequence to do 
 
