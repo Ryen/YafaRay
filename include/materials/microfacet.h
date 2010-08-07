@@ -14,7 +14,7 @@ __BEGIN_YAFRAY
 
 #define DIFFUSE_RATIO 1.21739130434782608696 // (28 / 23)
 #define pdfDivisor(cos) (float)(8.f * cos)
-#define ASDivisor(cos1, cosI, cosO) ( 8.f * cos1 * std::max(cosI, cosO) )
+#define ASDivisor(cos1, cosI, cosO) ( ( 8.f * cos1 * std::max(cosI, cosO) ) * 0.99f + 0.01f)
 
 inline void sample_quadrant_aniso(vector3d_t &H, float s1, float s2, float e_u, float e_v)
 {

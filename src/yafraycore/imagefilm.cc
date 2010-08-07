@@ -265,7 +265,7 @@ void imageFilm_t::nextPass(bool adaptive_AA, std::string integratorName)
 	}
 	
 	if(interactive) output->flush();
-
+	image->clear();
 	passString << "Rendering pass " << nPass << " of " << nPasses << ", resampling " << n_resample << " pixels.";
 
 	Y_INFO << integratorName << ": " << passString.str() << yendl;

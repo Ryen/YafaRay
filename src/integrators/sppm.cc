@@ -183,12 +183,12 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				colorA_t color;
 				if(hp.consNeedUpdate)
 				{
-					color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons) + gInfo.constantRandiance;
+					color = hp.accPhotonFlux / (/*hp.radius2 * M_PI **/ totalnPhotons) + gInfo.constantRandiance;
 					color.A = gInfo.constantRandiance.A;
 				}
 				else
 				{
-					color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons) + hp.constantRandiance;
+					color = hp.accPhotonFlux / (/*hp.radius2 * M_PI **/ totalnPhotons) + hp.constantRandiance;
 					color.A = hp.constantRandiance.A;
 				}				
 				// maintain the alpha value, need more tests.
@@ -226,7 +226,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	set << "RayDepth [" << rDepth << "]";
 
 	if(bHashgrid) photonGrid.clear();
-	else diffuseMap.clear();
+	else {diffuseMap.clear(); causticMap.clear();}
 
 	background = scene->getBackground();
 	lights = scene->lights;
@@ -273,19 +273,6 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	bool done=false;
 	unsigned int curr=0;
 
-	////reseed
-	//if(offset+3 < 50)
-	//{    
-	//hal2.setBase(prims[1+offset]);
-	//hal3.setBase(prims[2+offset]);
-	//hal4.setBase(prims[3+offset]);
-	//}
-
- //   hal2.setStart(offset);
- //   hal3.setStart(offset);
- //   hal4.setStart(offset);
-
-
 	surfacePoint_t sp;
 	random_t prng(offset*(4517)+123);
 	renderState_t state(&prng);
@@ -321,21 +308,6 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	   s2 = ourRandom();//hal2.getNext();
        s3 = ourRandom();//hal3.getNext();
        s4 = ourRandom();//hal4.getNext();
-
-	   //using Halton for first 50 pass, then using random(), I think a here need a better way to do it
-       //s1 = RI_vdC(curr);
-       //if(offset+3 < 50)
-       //{
-       //        s2 = hal2.getNext();
-       //        s3 = hal3.getNext();
-       //        s4 = hal4.getNext();
-       //}
-       //else
-       //{
-       //        s2 = ourRandom();
-       //        s3 = ourRandom();
-       //        s4 = ourRandom();
-       //}
 
 		sL = float(curr) * invDiffPhotons; // Does sL also need more random for each pass?
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
@@ -381,7 +353,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			material->initBSDF(state, sp, bsdfs);
 		
 			//deposit photon on diffuse surface, now we only have one map for all, elimate directPhoton for we estimate it directly
-			if(!directPhoton && (bsdfs & (BSDF_DIFFUSE)))
+			if(!directPhoton && !causticPhoton && (bsdfs & (BSDF_DIFFUSE)))
 			{		
 				photon_t np(wi, sp.P, pcol);// pcol used here
 				np.shadeN = sp.Ng;
@@ -389,8 +361,22 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 				if(bHashgrid) photonGrid.pushPhoton(np);
 				else
 				{
-				diffuseMap.pushPhoton(np);
-				diffuseMap.setNumPaths(curr); 
+					diffuseMap.pushPhoton(np);
+					diffuseMap.setNumPaths(curr); 
+				}
+				ndPhotonStored++;
+			}
+			// add caustic photon
+			if(!directPhoton && causticPhoton && (bsdfs & (BSDF_DIFFUSE | BSDF_GLOSSY)))
+			{
+				photon_t np(wi, sp.P, pcol);// pcol used here
+				np.shadeN = sp.Ng;
+
+				if(bHashgrid) photonGrid.pushPhoton(np);
+				else
+				{
+					causticMap.pushPhoton(np);
+					causticMap.setNumPaths(curr); 
 				}
 				ndPhotonStored++;
 			}
@@ -435,7 +421,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 
 	totalnPhotons +=  nPhotons;	// accumulate the total photon number, not using nPath for the case of hashgrid.
 
-	Y_INFO << integratorName << ": Stored photons: "<<diffuseMap.nPhotons()<<"\n";
+	Y_INFO << integratorName << ": Stored photons: "<<diffuseMap.nPhotons() + causticMap.nPhotons()<<"\n";
 	
 	if(bHashgrid)
 	{
@@ -451,6 +437,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			Y_INFO << integratorName << ": Building photons kd-tree:\n";
 			//pb->setTag("Building photons kd-tree...");
 			diffuseMap.updateTree();
+			causticMap.updateTree();
 			Y_INFO << integratorName << ": Done.\n";
 		}
 		if(diffuseMap.nPhotons() < 50) { Y_ERROR << integratorName << ": Too few photons, stopping now.\n"; return; }
@@ -515,7 +502,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		}
 		
 		// estimate radiance using photon map
-		PFLOAT radius2 = hp.radius2;    //actually the square radius... used for SPPM
+		PFLOAT radius2 = hp.radius2;    
 		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t)); //may cause stack overflow, should heap later.
 		int nGathered=0;
 		
@@ -548,18 +535,50 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				std::cout << "maximum Photons: "<<_nMax<<", radius2: "<<radius2<<"\n";
 				if(_nMax == 10) for(int j=0; j < nGathered; ++j ) std::cout<<"col:"<<gathered[j].photon->color()<<"\n";
 			}
-			//float scale = 1.f; // scale is useless now
+			float scale = 1.f / (hp.radius2 * M_PI); // scale is useless now
 			for(int i=0; i<nGathered; ++i)
 			{
+				////test if the photon is in the ellipsoid
+				//vector3d_t scale  = sp.P - gathered[i].photon->pos;
+				//vector3d_t temp;
+				//temp.x = scale VDOT sp.NU;
+				//temp.y = scale VDOT sp.NV;
+				//temp.z = scale VDOT sp.N;
+
+				//double inv_radi = 1 / sqrt(radius2);
+				//temp.x  *= inv_radi; temp.y *= inv_radi; temp.z *=  1. / (2.f * MIN_RAYDIST);
+				//if(temp.lengthSqr() > 1.)continue;
+
 				gInfo.photonCount++;
 				vector3d_t pdir = gathered[i].photon->direction();
 				color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE); // seems could speed up using rho, (something pbrt made)
-				gInfo.photonFlux += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+				gInfo.photonFlux += surfCol * scale * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
 			}
 		}
-		
+
 		// add caustics need to be changed for sppm
 		//merged into diffuseMap
+		if(bsdfs & BSDF_DIFFUSE)
+		{
+			radius2 = hp.radius2; //reset radius2
+
+			nGathered = 0;
+			foundPhoton_t *gathered2 = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t));
+			nGathered = causticMap.gather(sp.P, gathered2, nMaxGather, radius2);
+			if(nGathered > 0)
+			{
+				float k = 0.f;
+				float gRadiusSquare = 1.f / hp.radius2; 
+				for(int i=0; i<nGathered; ++i)
+				{
+					gInfo.photonCount++;
+					vector3d_t pdir = gathered2[i].photon->direction();
+					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE | BSDF_SPECULAR | BSDF_GLOSSY); // seems could speed up using rho, (something pbrt made)
+					k = kernel(gathered2[i].distSquare, gRadiusSquare);
+					gInfo.photonFlux += surfCol * k * gathered2[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+				}
+			}
+		}
 
 		state.raylevel++;
 		if(state.raylevel <= rDepth)
