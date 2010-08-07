@@ -103,7 +103,6 @@ class photon_t
 #else
 		color_t c;
 		normal_t dir;
-		vector3d_t shadeN;
 #endif
 };
 

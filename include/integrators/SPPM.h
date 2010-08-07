@@ -64,7 +64,7 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	static integrator_t* factory(paraMap_t &params, renderEnvironment_t &render);
 
 	/*! initializing the things that PPM uses such as initial radius */
-	void initializePPM(bool us_PM);
+	void initializePPM();
 
 	/*! based on integrate method to do the gatering trace, need double-check deadly. */
 	GatherInfo traceGatherRay(renderState_t &state, diffRay_t &ray, HitPoint &hp);

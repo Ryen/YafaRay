@@ -66,12 +66,12 @@ bool SPPM::render(yafaray::imageFilm_t *image)
 	if(scene->doDepth()) precalcDepths();
 
 	nDireCompt = 10; // only the first 10 pass need compute direct light. save some time for huge pass used in sppm
-	initializePPM(PM_IRE); // seems could integrate into the preRender
+	initializePPM(); // seems could integrate into the preRender
 	renderPass(1, 0, false);
 	PM_IRE = false;
 
 	int hpNum = camera->resX() * camera->resY();
-	for(int i=0; i<passNum; ++i) //progress pass
+	for(int i=1; i<passNum; ++i) //progress pass, the offset start from 1 as it is 0 based.
 	{
 		if(scene->getSignals() & Y_SIG_ABORT) break;
 		imageFilm->nextPass(false, integratorName);
@@ -152,7 +152,7 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				//for sppm progressive
 				int index = i*camera->resX() + j; 
 				HitPoint &hp = hitPoints[index];
-				if(offset == nDireCompt + 1) 
+				if(offset == nDireCompt) // as offset is 0 based
 				{
 					hp.consNeedUpdate = false;
 					hp.constantRandiance *= 1/float(nDireCompt);
@@ -160,38 +160,40 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 
 				GatherInfo gInfo = traceGatherRay(rstate, c_ray, hp);
 				gInfo.photonFlux *= scene->volIntegrator->transmittance(rstate, c_ray);
+
 				if(hp.consNeedUpdate)
 				{
 					gInfo.constantRandiance *= scene->volIntegrator->transmittance(rstate, c_ray);
 					gInfo.constantRandiance += scene->volIntegrator->integrate(rstate, c_ray); // Now using it to simulate for volIntegrator not using PPM, need more tests
-					hp.constantRandiance += gInfo.constantRandiance;
+					hp.constantRandiance += gInfo.constantRandiance; // accumalate the constant randiance for later useage.
 				}
 
 				// progressive refinement
-				const float _alpha = 0.7; // change to 0.8 to do a tests
+				const float _alpha = 0.7f; // another common choice is 0.8, seems not changed much. 
 
 				// The author's refine formular
 				if(gInfo.photonCount > 0)
 				{
-					float g = std::min((hp.accPhotonCount + _alpha * gInfo.photonCount) / (hp.accPhotonCount+ gInfo.photonCount), 1.0f);
+					float g = std::min((hp.accPhotonCount + _alpha * gInfo.photonCount) / (hp.accPhotonCount + gInfo.photonCount), 1.0f);
 					hp.radius2 *= g;
 					hp.accPhotonCount += gInfo.photonCount * _alpha;
 					hp.accPhotonFlux = (hp.accPhotonFlux + gInfo.photonFlux) * g;
-					nRefined++;
+					nRefined++; // record the pixel that has refined.
 				}
+
 				//radiance estimate
-				colorA_t color;
+				colorA_t color = hp.accPhotonFlux / (hp.radius2 * M_PI * totalnPhotons);
 				if(hp.consNeedUpdate)
 				{
-					color = hp.accPhotonFlux / (/*hp.radius2 * M_PI **/ totalnPhotons) + gInfo.constantRandiance;
+					color += gInfo.constantRandiance;
 					color.A = gInfo.constantRandiance.A;
 				}
 				else
 				{
-					color = hp.accPhotonFlux / (/*hp.radius2 * M_PI **/ totalnPhotons) + hp.constantRandiance;
+					color +=  hp.constantRandiance;
 					color.A = hp.constantRandiance.A;
-				}				
-				// maintain the alpha value, need more tests.
+				}
+
 				imageFilm->addSample(wt * color, j, i, dx, dy, &a);
 
 				if(do_depth)
@@ -356,8 +358,7 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			if(!directPhoton && !causticPhoton && (bsdfs & (BSDF_DIFFUSE)))
 			{		
 				photon_t np(wi, sp.P, pcol);// pcol used here
-				np.shadeN = sp.Ng;
-
+		
 				if(bHashgrid) photonGrid.pushPhoton(np);
 				else
 				{
@@ -370,7 +371,6 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 			if(!directPhoton && causticPhoton && (bsdfs & (BSDF_DIFFUSE | BSDF_GLOSSY)))
 			{
 				photon_t np(wi, sp.P, pcol);// pcol used here
-				np.shadeN = sp.Ng;
 
 				if(bHashgrid) photonGrid.pushPhoton(np);
 				else
@@ -416,7 +416,6 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	//pb->setTag("Photon map built.");
 	Y_INFO << integratorName << ":Photon map built.\n";
 	Y_INFO << integratorName << ": Shot "<<curr<<" photons from " << numDLights << " light(s)\n";
-	Y_INFO << integratorName << ": Stored photon vertexs: " << ndPhotonStored << yendl;
 	delete lightPowerD;
 
 	totalnPhotons +=  nPhotons;	// accumulate the total photon number, not using nPath for the case of hashgrid.
@@ -426,16 +425,14 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	if(bHashgrid)
 	{
 		Y_INFO << integratorName << ": Building photons hashgrid:\n";
-		//pb->setTag("Building photons hashgrid...");
 		photonGrid.updateGrid();
 		Y_INFO << integratorName << ": Done.\n";
 	}
 	else
 	{
-		if(diffuseMap.nPhotons() > 0) //
+		if(diffuseMap.nPhotons() > 0 || causticMap.nPhotons() > 0)
 		{
 			Y_INFO << integratorName << ": Building photons kd-tree:\n";
-			//pb->setTag("Building photons kd-tree...");
 			diffuseMap.updateTree();
 			causticMap.updateTree();
 			Y_INFO << integratorName << ": Done.\n";
@@ -502,83 +499,89 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		}
 		
 		// estimate radiance using photon map
-		PFLOAT radius2 = hp.radius2;    
-		foundPhoton_t *gathered = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t)); //may cause stack overflow, should heap later.
+		foundPhoton_t *gathered = new foundPhoton_t[nMaxGather];
+
+		//if PM_IRE is on. we should estimate the initial radius using the photonMaps. (PM_IRE is only for the first pass, so not consume much time)
+		if(PM_IRE && !hp.radiusSetted) // "waste" two gather here as it has two maps now. This make the logic simple. 
+		{												
+			PFLOAT radius_1 = dsRadius * dsRadius;
+			PFLOAT radius_2 = radius_1;
+			int nGathered_1 = 0, nGathered_2 = 0;
+
+			nGathered_1 = diffuseMap.gather(sp.P, gathered, nSearch, radius_1);
+			nGathered_2 = causticMap.gather(sp.P, gathered, nSearch, radius_2);
+			if(nGathered_1 > 0 || nGathered_2 >0) // it none photon gathered, we just skip.
+			{
+				if(radius_1 < radius_2) // we choose the smaller one to be the initial radius.
+					hp.radius2 = radius_1;
+				else
+					hp.radius2 = radius_2;
+				
+				hp.radiusSetted = true;
+			}
+		}
+
 		int nGathered=0;
-		
+		PFLOAT radius2 = hp.radius2;
+
 		if(bHashgrid) 
-			nGathered = photonGrid.gather(sp.P, gathered, nMaxGather, radius2); // alway diable now
+			nGathered = photonGrid.gather(sp.P, gathered, nMaxGather, radius2); // disable now
 		else
 		{
-			if(diffuseMap.nPhotons() > 0)
-			{
-				if(PM_IRE && !hp.radiusSetted)
-				{
-					radius2 = dsRadius * dsRadius; 
-					nGathered = diffuseMap.gather(sp.P, gathered, nSearch, radius2);  // adaptive choose the initial radius
-					if(nGathered > 0)
-					{
-						hp.radius2 = radius2;  //should set only once, or the normalize will be wrong.
-						hp.radiusSetted = true;
-					}
-				}
-				else
-					nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius2); //we always collected all the photon inside the radius
+			if(diffuseMap.nPhotons() > 0) // this seems alway be true
+			{	
+				nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius2); //we always collected all the photon inside the radius
 			}
-		}
 
-		if(nGathered > 0)
-		{
-			if(nGathered > _nMax)
-			{
-				_nMax = nGathered;
-				std::cout << "maximum Photons: "<<_nMax<<", radius2: "<<radius2<<"\n";
-				if(_nMax == 10) for(int j=0; j < nGathered; ++j ) std::cout<<"col:"<<gathered[j].photon->color()<<"\n";
-			}
-			float scale = 1.f / (hp.radius2 * M_PI); // scale is useless now
-			for(int i=0; i<nGathered; ++i)
-			{
-				////test if the photon is in the ellipsoid
-				//vector3d_t scale  = sp.P - gathered[i].photon->pos;
-				//vector3d_t temp;
-				//temp.x = scale VDOT sp.NU;
-				//temp.y = scale VDOT sp.NV;
-				//temp.z = scale VDOT sp.N;
-
-				//double inv_radi = 1 / sqrt(radius2);
-				//temp.x  *= inv_radi; temp.y *= inv_radi; temp.z *=  1. / (2.f * MIN_RAYDIST);
-				//if(temp.lengthSqr() > 1.)continue;
-
-				gInfo.photonCount++;
-				vector3d_t pdir = gathered[i].photon->direction();
-				color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE); // seems could speed up using rho, (something pbrt made)
-				gInfo.photonFlux += surfCol * scale * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
-			}
-		}
-
-		// add caustics need to be changed for sppm
-		//merged into diffuseMap
-		if(bsdfs & BSDF_DIFFUSE)
-		{
-			radius2 = hp.radius2; //reset radius2
-
-			nGathered = 0;
-			foundPhoton_t *gathered2 = (foundPhoton_t *)alloca(nMaxGather * sizeof(foundPhoton_t));
-			nGathered = causticMap.gather(sp.P, gathered2, nMaxGather, radius2);
 			if(nGathered > 0)
 			{
-				float k = 0.f;
-				float gRadiusSquare = 1.f / hp.radius2; 
+				if(nGathered > _nMax)
+				{
+					_nMax = nGathered;
+					std::cout << "maximum Photons: "<<_nMax<<", radius2: "<<radius2<<"\n";
+					if(_nMax == 10) for(int j=0; j < nGathered; ++j ) std::cout<<"col:"<<gathered[j].photon->color()<<"\n";
+				}
 				for(int i=0; i<nGathered; ++i)
 				{
+					////test if the photon is in the ellipsoid
+					//vector3d_t scale  = sp.P - gathered[i].photon->pos;
+					//vector3d_t temp;
+					//temp.x = scale VDOT sp.NU;
+					//temp.y = scale VDOT sp.NV;
+					//temp.z = scale VDOT sp.N;
+
+					//double inv_radi = 1 / sqrt(radius2);
+					//temp.x  *= inv_radi; temp.y *= inv_radi; temp.z *=  1. / (2.f * MIN_RAYDIST);
+					//if(temp.lengthSqr() > 1.)continue;
+
 					gInfo.photonCount++;
-					vector3d_t pdir = gathered2[i].photon->direction();
-					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE | BSDF_SPECULAR | BSDF_GLOSSY); // seems could speed up using rho, (something pbrt made)
-					k = kernel(gathered2[i].distSquare, gRadiusSquare);
-					gInfo.photonFlux += surfCol * k * gathered2[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+					vector3d_t pdir = gathered[i].photon->direction();
+					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE); // seems could speed up using rho, (something pbrt made)
+					gInfo.photonFlux += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+				}
+			}
+
+			// gather caustics photons
+			if(bsdfs & BSDF_DIFFUSE)
+			{
+				radius2 = hp.radius2; //reset radius2 & nGathered
+				nGathered = 0;
+				nGathered = causticMap.gather(sp.P, gathered, nMaxGather, radius2);
+				if(nGathered > 0)
+				{
+					color_t surfCol(0.f);
+					for(int i=0; i<nGathered; ++i)
+					{	
+						vector3d_t pdir = gathered[i].photon->direction();
+						if(wo*pdir < -0.9f) continue;
+						gInfo.photonCount++;
+						surfCol = material->eval(state, sp, wo, pdir, BSDF_ALL); // seems could speed up using rho, (something pbrt made)
+						gInfo.photonFlux += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+					}
 				}
 			}
 		}
+		delete [] gathered;
 
 		state.raylevel++;
 		if(state.raylevel <= rDepth)
@@ -771,7 +774,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 	return gInfo;
 }
 
-void SPPM::initializePPM(bool us_PM)
+void SPPM::initializePPM()
 {
 	const camera_t* camera = scene->getCamera();
 	unsigned int resolution = camera->resX() * camera->resY();
@@ -781,17 +784,16 @@ void SPPM::initializePPM(bool us_PM)
 
 	// initialize SPPM statistics
 	float initialRadius = ((bBox.longX() + bBox.longY() + bBox.longZ()) / 3.f) / ((camera->resX() + camera->resY()) / 2.0f) * 2.f ;
-	initialRadius = std::min(initialRadius, 1.f); //Fix the overflow bug, but seems contain some bugs also, need more tests 
+	initialRadius = std::min(initialRadius, 1.f); //Fix the overflow bug
 	for(int i = 0; i < resolution; i++)
 	{
 		HitPoint hp;
-
 		hp.accPhotonFlux  = colorA_t(0.f);
 		hp.accPhotonCount = 0;
 		hp.radius2 = (initialRadius * initialFactor) * (initialRadius * initialFactor);
 		hp.constantRandiance = colorA_t(0.f);
-		hp.consNeedUpdate = true;
-		hp.radiusSetted = false;
+		hp.consNeedUpdate = true; // we should estimate direct light for the first few pass. which is entially to show the glossy's highlight
+		hp.radiusSetted = false;	   // the flag used for IRE
 
 		hitPoints.push_back(hp);
 	}
@@ -832,7 +834,7 @@ integrator_t* SPPM::factory(paraMap_t &params, renderEnvironment_t &render)
 
 	ite->dsRadius = dsRad; // under tests enable now
 	ite->nSearch = searchNum; 
-	ite->PM_IRE = pmIRE; 
+	ite->PM_IRE = pmIRE;
 
 	return ite;
 }
