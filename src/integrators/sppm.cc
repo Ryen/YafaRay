@@ -573,7 +573,6 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 					for(int i=0; i<nGathered; ++i)
 					{	
 						vector3d_t pdir = gathered[i].photon->direction();
-						if(wo*pdir < -0.9f) continue;
 						gInfo.photonCount++;
 						surfCol = material->eval(state, sp, wo, pdir, BSDF_ALL); // seems could speed up using rho, (something pbrt made)
 						gInfo.photonFlux += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
