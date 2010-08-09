@@ -306,10 +306,10 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 		state.wavelength = scrHalton(5, curr);
 
 	   // Tried LD, get bad and strange results for some stategy.
-       s1 = ourRandom();//hal1.getNext();
-	   s2 = ourRandom();//hal2.getNext();
-       s3 = ourRandom();//hal3.getNext();
-       s4 = ourRandom();//hal4.getNext();
+       s1 = hal1.getNext();
+	   s2 = hal2.getNext();
+       s3 = hal3.getNext();
+       s4 = hal4.getNext();
 
 		sL = float(curr) * invDiffPhotons; // Does sL also need more random for each pass?
 		int lightNum = lightPowerD->DSample(sL, &lightNumPdf);
@@ -430,12 +430,17 @@ void SPPM::prePass(int samples, int offset, bool adaptive)
 	}
 	else
 	{
-		if(diffuseMap.nPhotons() > 0 || causticMap.nPhotons() > 0)
+		if(diffuseMap.nPhotons() > 0)
 		{
-			Y_INFO << integratorName << ": Building photons kd-tree:\n";
+			Y_INFO << integratorName << ": Building diffuse photons kd-tree:" << yendl;
 			diffuseMap.updateTree();
-			causticMap.updateTree();
 			Y_INFO << integratorName << ": Done.\n";
+		}
+		if(causticMap.nPhotons() > 0)
+		{
+			Y_INFO << integratorName << ": Building caustic photons kd-tree:" << yendl;
+			causticMap.updateTree();
+			Y_INFO << integratorName << ": Done." << yendl;
 		}
 		if(diffuseMap.nPhotons() < 50) { Y_ERROR << integratorName << ": Too few photons, stopping now.\n"; return; }
 	}
@@ -508,8 +513,10 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			PFLOAT radius_2 = radius_1;
 			int nGathered_1 = 0, nGathered_2 = 0;
 
-			nGathered_1 = diffuseMap.gather(sp.P, gathered, nSearch, radius_1);
-			nGathered_2 = causticMap.gather(sp.P, gathered, nSearch, radius_2);
+			if(diffuseMap.nPhotons() > 0)
+				nGathered_1 = diffuseMap.gather(sp.P, gathered, nSearch, radius_1);
+			if(causticMap.nPhotons() > 0)
+				nGathered_2 = causticMap.gather(sp.P, gathered, nSearch, radius_2);
 			if(nGathered_1 > 0 || nGathered_2 >0) // it none photon gathered, we just skip.
 			{
 				if(radius_1 < radius_2) // we choose the smaller one to be the initial radius.
@@ -528,7 +535,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			nGathered = photonGrid.gather(sp.P, gathered, nMaxGather, radius2); // disable now
 		else
 		{
-			if(diffuseMap.nPhotons() > 0) // this seems alway be true
+			if(diffuseMap.nPhotons() > 0) // this is needed to avoid a runtime error.
 			{	
 				nGathered = diffuseMap.gather(sp.P, gathered, nMaxGather, radius2); //we always collected all the photon inside the radius
 			}
@@ -562,8 +569,9 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			}
 
 			// gather caustics photons
-			if(bsdfs & BSDF_DIFFUSE)
+			if(bsdfs & BSDF_DIFFUSE && causticMap.ready())
 			{
+				
 				radius2 = hp.radius2; //reset radius2 & nGathered
 				nGathered = 0;
 				nGathered = causticMap.gather(sp.P, gathered, nMaxGather, radius2);
@@ -585,11 +593,13 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		state.raylevel++;
 		if(state.raylevel <= rDepth)
 		{
+			Halton hal2(2);
+			Halton hal3(3);
 			// dispersive effects with recursive raytracing:
 			if( (bsdfs & BSDF_DISPERSIVE) && state.chromatic )
 			{
-				state.includeLights = true; //debatable...
-				int dsam = 8;  // seems not handle the same as glossy does. one BSDF_VOLUMETRIC is inside the loop, the other is outside
+				state.includeLights = false; //debatable...
+				int dsam = 8;
 				int oldDivision = state.rayDivision;
 				int oldOffset = state.rayOffset;
 				float old_dc1 = state.dc1, old_dc2 = state.dc2;
@@ -599,30 +609,32 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				float d_1 = 1.f/(float)dsam;
 				float ss1 = RI_S(state.pixelSample + state.samplingOffs);
 				color_t dcol(0.f), vcol(1.f);
-				GatherInfo cing, t_cing; //Dispersive is different handled, not same as GLOSSY, at the BSDF_VOLUMETRIC part
 				vector3d_t wi;
-				const volumeHandler_t* vol;
+				const volumeHandler_t *vol;
 				diffRay_t refRay;
+				float W = 0.f;
+				GatherInfo cing, t_cing; //Dispersive is different handled, not same as GLOSSY, at the BSDF_VOLUMETRIC part
+
 				for(int ns=0; ns<dsam; ++ns)
 				{
 					state.wavelength = (ns + ss1)*d_1;
 					state.dc1 = scrHalton(2*state.raylevel+1, branch + state.samplingOffs);
 					state.dc2 = scrHalton(2*state.raylevel+2, branch + state.samplingOffs);
-					if(oldDivision > 1)	state.wavelength = addMod1(state.wavelength, old_dc1);
+					if(oldDivision > 1)  state.wavelength = addMod1(state.wavelength, old_dc1);
 					state.rayOffset = branch;
 					++branch;
 					sample_t s(0.5f, 0.5f, BSDF_REFLECT|BSDF_TRANSMIT|BSDF_DISPERSIVE);
-					color_t mcol = material->sample(state, sp, wo, wi, s);
+					color_t mcol = material->sample(state, sp, wo, wi, s, W);
+
 					if(s.pdf > 1.0e-6f && (s.sampledFlags & BSDF_DISPERSIVE))
 					{
-						mcol *= std::fabs(wi*sp.N)/s.pdf;
+						state.chromatic = false;
 						color_t wl_col;
 						wl2rgb(state.wavelength, wl_col);
-						state.chromatic = false;
 						refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
 						t_cing = traceGatherRay(state, refRay, hp);
-						t_cing.photonFlux *= mcol * wl_col;
-						t_cing.constantRandiance *= mcol * wl_col;
+						t_cing.photonFlux *= mcol * wl_col * W;
+						t_cing.constantRandiance *= mcol * wl_col * W;
 						state.chromatic = true;
 					}
 					cing += t_cing;
@@ -647,42 +659,51 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 			if( bsdfs & (BSDF_GLOSSY))
 			{
 				state.includeLights = false;
-				int gsam = 8; 
+				int gsam = 8;
 				int oldDivision = state.rayDivision;
 				int oldOffset = state.rayOffset;
 				float old_dc1 = state.dc1, old_dc2 = state.dc2;
 				if(state.rayDivision > 1) gsam = std::max(1, gsam/oldDivision);
 				state.rayDivision *= gsam;
 				int branch = state.rayDivision*oldOffset;
-				int offs = gsam * state.pixelSample + state.samplingOffs;
+				unsigned int offs = gsam * state.pixelSample + state.samplingOffs;
 				float d_1 = 1.f/(float)gsam;
 				color_t gcol(0.f), vcol(1.f);
-				GatherInfo ging, t_ging;
 				vector3d_t wi;
-				const volumeHandler_t* vol;
+				const volumeHandler_t *vol;
 				diffRay_t refRay;
+
+				GatherInfo ging, t_ging;
+
+				hal2.setStart(offs);
+				hal3.setStart(offs);
+				
+
 				for(int ns=0; ns<gsam; ++ns)
 				{
 					state.dc1 = scrHalton(2*state.raylevel+1, branch + state.samplingOffs);
 					state.dc2 = scrHalton(2*state.raylevel+2, branch + state.samplingOffs);
 					state.rayOffset = branch;
+					++offs;
 					++branch;
-					float s1 = RI_vdC(offs + ns);
-					float s2 = scrHalton(2, offs + ns);
-					if(oldDivision > 1) // create generalized halton sequence
+
+					float s1 = RI_vdC(offs);
+					float s2 = hal2.getNext();//scrHalton(2, offs);
+					
+					float W = 0.f;
+
+					sample_t s(s1, s2, BSDF_ALL_GLOSSY);
+					color_t mcol = material->sample(state, sp, wo, wi, s, W);
+
+					if(s.sampledFlags & BSDF_GLOSSY)
 					{
-						s1 = addMod1(s1, old_dc1);
-						s2 = addMod1(s2, old_dc2);
-					}
-					sample_t s(s1, s2, BSDF_REFLECT|BSDF_TRANSMIT|BSDF_GLOSSY);
-					color_t mcol = material->sample(state, sp, wo, wi, s);
-					if(s.pdf > 1.0e-5f && (s.sampledFlags & BSDF_GLOSSY))
-					{
-						mcol *= std::fabs(wi*sp.N)/s.pdf;
 						refRay = diffRay_t(sp.P, wi, MIN_RAYDIST);
+						if(s.sampledFlags & BSDF_REFLECT) spDiff.reflectedRay(ray, refRay);
+						else if(s.sampledFlags & BSDF_TRANSMIT) spDiff.refractedRay(ray, refRay, material->getMatIOR());
+
 						t_ging = traceGatherRay(state, refRay, hp);
-						t_ging.photonFlux *=mcol;
-						t_ging.constantRandiance *= mcol;
+						t_ging.photonFlux *=mcol * W;
+						t_ging.constantRandiance *= mcol * W;
 					}
 					
 					if((bsdfs&BSDF_VOLUMETRIC) && (vol=material->getVolumeHandler(sp.Ng * refRay.dir < 0)))
@@ -702,7 +723,8 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 				//restore renderstate
 				state.rayDivision = oldDivision;
 				state.rayOffset = oldOffset;
-				state.dc1 = old_dc1; state.dc2 = old_dc2;
+				state.dc1 = old_dc1;
+				state.dc2 = old_dc2;
 			}			
 			//...perfect specular reflection/refraction with recursive raytracing...
 			if(bsdfs & (BSDF_SPECULAR | BSDF_FILTER))
