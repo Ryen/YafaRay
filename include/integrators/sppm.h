@@ -20,12 +20,12 @@
 #include <yafraycore/hashgrid.h>
 __BEGIN_YAFRAY
 
-typedef struct _HitPoint // per-pixel amount
+typedef struct _HitPoint // actually are per-pixel variable, use to record the sppm's shared statistics
 {
-	float radius2; // square radius,
-	unsigned long long accPhotonCount;
+	float radius2; // square search-radius, shrink during the passes
+	unsigned long long accPhotonCount; // record the total photon this pixel gathered
 	colorA_t accPhotonFlux; // accumulated flux
-	colorA_t constantRandiance;
+	colorA_t constantRandiance; // record the direct light for this pixel
 
 	bool consNeedUpdate; // use to dertermine is constantRandiance need to estimate
 	bool radiusSetted; // used by IRE to direct whether the initial radius is set or not.
@@ -59,8 +59,10 @@ class YAFRAYPLUGIN_EXPORT SPPM: public mcIntegrator_t
 	/*! render a tile; only required by default implementation of render() */
 	virtual bool renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive, int threadID);
 	virtual bool preprocess(); //not used for now
-	virtual void prePass(int samples, int offset, bool adaptive); // do a  photon pass
-	virtual colorA_t integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const; // not used now
+	// not used now
+	virtual void prePass(int samples, int offset, bool adaptive); 
+	/*! not used now, use traceGatherRay instead*/
+	virtual colorA_t integrate(renderState_t &state, diffRay_t &ray/*, sampler_t &sam*/) const; 
 	static integrator_t* factory(paraMap_t &params, renderEnvironment_t &render);
 
 	/*! initializing the things that PPM uses such as initial radius */

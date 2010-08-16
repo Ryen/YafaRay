@@ -1,6 +1,5 @@
 ﻿ //Quesions:  1.  Now just want to use visual importance to speed the render
-//                  2.	 Need  a correct reseed strategy to make sppm more efficient.
-//					 3. Using heap instead stack to fix stackoverflow
+
 
 #include <integrators/sppm.h>
 #include <yafraycore/scr_halton.h>
@@ -152,6 +151,9 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				//for sppm progressive
 				int index = i*camera->resX() + j; 
 				HitPoint &hp = hitPoints[index];
+
+				//if the pass number beyond the setted threshold(now is 10), we not need to compute constant radius any more,
+				//as it is not progressive
 				if(offset == nDireCompt) // as offset is 0 based
 				{
 					hp.consNeedUpdate = false;
@@ -186,7 +188,7 @@ bool SPPM::renderTile(renderArea_t &a, int n_samples, int offset, bool adaptive,
 				if(hp.consNeedUpdate)
 				{
 					color += gInfo.constantRandiance;
-					color.A = gInfo.constantRandiance.A;
+					color.A = gInfo.constantRandiance.A; //the alpha value is hold in the constantRadiance variable
 				}
 				else
 				{
@@ -498,6 +500,7 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 		state.includeLights = false;
 		spDifferentials_t spDiff(sp, ray);
 
+		//constant radiance not need to update for each pass, this is a small trick to accelerate the sppm
 		if( hp.consNeedUpdate && (bsdfs & BSDF_DIFFUSE))
 		{
 			gInfo.constantRandiance += estimateAllDirectLight(state, sp, wo);
@@ -565,6 +568,14 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 					vector3d_t pdir = gathered[i].photon->direction();
 					color_t surfCol = material->eval(state, sp, wo, pdir, BSDF_DIFFUSE); // seems could speed up using rho, (something pbrt made)
 					gInfo.photonFlux += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+					//color_t  flux= surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+
+					////start refine here
+					//double ALPHA = 0.7;
+					//double g = (hp.accPhotonCount*ALPHA+ALPHA) / (hp.accPhotonCount*ALPHA+1.0);
+					//hp.radius2 *= g; 
+					//hp.accPhotonCount++;
+					//hp.accPhotonFlux=((color_t)hp.accPhotonFlux+flux)*g;
 				}
 			}
 
@@ -584,6 +595,14 @@ GatherInfo SPPM::traceGatherRay(yafaray::renderState_t &state, yafaray::diffRay_
 						gInfo.photonCount++;
 						surfCol = material->eval(state, sp, wo, pdir, BSDF_ALL); // seems could speed up using rho, (something pbrt made)
 						gInfo.photonFlux += surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+						//color_t  flux= surfCol * gathered[i].photon->color();// * std::fabs(sp.N*pdir); //< wrong!?
+
+						////start refine here
+						//double ALPHA = 0.7;
+						//double g = (hp.accPhotonCount*ALPHA+ALPHA) / (hp.accPhotonCount*ALPHA+1.0);
+						//hp.radius2 *= g; 
+						//hp.accPhotonCount++;
+						//hp.accPhotonFlux=((color_t)hp.accPhotonFlux+flux)*g;
 					}
 				}
 			}
